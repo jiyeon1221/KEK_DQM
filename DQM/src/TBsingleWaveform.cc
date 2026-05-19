@@ -25,9 +25,14 @@
 
 
 TBsingleWaveform::TBsingleWaveform(ObjectCollection* fObj) {
-  // Config 파일 경로: autoTB/config_general.yml (절대 경로)
+  // Config file path: prefer --Config <path> from the CLI; fall back to
+  // the legacy hard-coded autoTB location.
   std::string config_path = "/Users/yhep/autoTB/config_general.yml";
-  
+  std::string config_arg;
+  fObj->GetVariable("Config", &config_arg);
+  if (!config_arg.empty() && config_arg != "null")
+    config_path = config_arg;
+
   fConfig = TBconfig(config_path);
   const YAML::Node fConfig_YAML = fConfig.GetConfig();
 

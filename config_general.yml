@@ -1,5 +1,9 @@
-BaseDirectory: "/Volumes/yhep/scratch/YUdaq"
-Mapping: "/Users/yhep/autoTB/DQM/mapping/toymapping.root"
+# BaseDirectory: "/Volumes/yhep/scratch/YUdaq"
+BaseDirectory: "/Users/yhep/autoTB/toydataset"
+# Mapping: "/Users/yhep/autoTB/DQM/mapping/toymapping.root"
+# Mapping: "/Users/yhep/tmp_test/KEK_DQM/DQM/mapping/mapping_KEK.root"
+Mapping: "/Users/yhep/tmp_test/KEK_DQM/DQM/mapping/toymapping_v2.root"
+# Mapping: "/Users/yhep/tmp_test/KEK_DQM/DQM/mapping/legacy_mapping/mapping_TB2025_v1.root"
 
 # ===== 경로 설정  =====
 Paths:
@@ -49,7 +53,32 @@ AUX:
     CENTER: [-71.8982, -116.249]     # Reference timing offsets (ns) for X and Y
     THRESHOLD: 0.3         # Leading-edge fraction
     POSCUT: 5           # Optional |x|,|y| cut in mm
-    
+
+  Hodoscope:
+    # Reference point in raw fiber coordinates (X_ref, Y_ref in fiber units,
+    # 0..16) where the beam-center actually falls. The center-corrected
+    # hodoscope plot shifts this point onto the nominal hodoscope center
+    # (8, 8). Default [8, 8] means "no correction" (corrected == raw).
+    # Update this after a calibration run, just like AUX.WC.CENTER.
+    CENTER: [8, 8]
+    # Which brightest-fiber metric to feed into the WC<->Hodo inclination cut
+    # (--AUXCutMode WCHodo). Both metrics are always *displayed* in the AUX
+    # plots; this only selects which one decides whether an event passes
+    # IsPassing(). Accepted: IntADC | PeakADC. Default: IntADC.
+    CUT_METHOD: IntADC
+
+  # ===== Beam-inclination cut =============================================
+  # Only active when --AUXcut is on AND --AUXCutMode WCHodo is selected.
+  # On top of the WC POSCUT, rejects events whose (center-corrected) WC and
+  # hodoscope beam-spot positions disagree by more than these limits, in mm:
+  #     |x_WC_corrected - x_Hodo_corrected| < INCLINATION_CUT[0]
+  #     |y_WC_corrected - y_Hodo_corrected| < INCLINATION_CUT[1]
+  # This removes inclined / off-axis beam events that would still pass the
+  # WC POSCUT alone (e.g. a particle that grazes the WC center but enters
+  # the hodoscope a few mm away - it would miss our detector's front face
+  # center). Hodoscope position is taken from the IntADC brightest fiber.
+  INCLINATION_CUT: [4, 4]
+
 ModuleConfig:
   trg1: [80, 230]
   trg2: [80, 230]
@@ -79,4 +108,163 @@ ModuleConfig:
   T7-C: [150, 310]
   T8-C: [150, 310]
   T9-C: [150, 310]
-
+  HX1: [600, 900]
+  HX2: [600, 900]
+  HX3: [600, 900]
+  HX4: [600, 900]
+  HX5: [600, 900]
+  HX6: [600, 900]
+  HX7: [600, 900]
+  HX8: [600, 900]
+  HX9: [600, 900]
+  HX10: [600, 900]
+  HX11: [600, 900]
+  HX12: [600, 900]
+  HX13: [600, 900]
+  HX14: [600, 900]
+  HX15: [600, 900]
+  HX16: [600, 900]
+  HY1: [600, 900]
+  HY2: [600, 900]
+  HY3: [600, 900]
+  HY4: [600, 900]
+  HY5: [600, 900]
+  HY6: [600, 900]
+  HY7: [600, 900]
+  HY8: [600, 900]
+  HY9: [600, 900]
+  HY10: [600, 900]
+  HY11: [600, 900]
+  HY12: [600, 900]
+  HY13: [600, 900]
+  HY14: [600, 900]
+  HY15: [600, 900]
+  HY16: [600, 900]
+  C1: [150, 350]
+  C2: [150, 350]
+  C3: [150, 350]
+  C4: [150, 350]
+  C5: [150, 350]
+  C6: [150, 350]
+  C7: [150, 350]
+  C8: [150, 350]
+  C9: [150, 350]
+  C10: [150, 350]
+  C11: [150, 350]
+  C12: [150, 350]
+  C13: [150, 350]
+  C14: [150, 350]
+  C15: [150, 350]
+  C16: [150, 350]
+  C17: [150, 350]
+  C18: [150, 350]
+  C19: [150, 350]
+  C20: [150, 350]
+  C21: [150, 350]
+  C22: [150, 350]
+  C23: [150, 350]
+  C24: [150, 350]
+  C25: [150, 350]
+  C26: [150, 350]
+  C27: [150, 350]
+  C28: [150, 350]
+  C29: [150, 350]
+  C30: [150, 350]
+  C31: [150, 350]
+  C32: [150, 350]
+  C33: [150, 350]
+  C34: [150, 350]
+  C35: [150, 350]
+  C36: [150, 350]
+  C37: [150, 350]
+  C38: [150, 350]
+  C39: [150, 350]
+  C40: [150, 350]
+  C41: [150, 350]
+  C42: [150, 350]
+  C43: [150, 350]
+  C44: [150, 350]
+  C45: [150, 350]
+  C46: [150, 350]
+  C47: [150, 350]
+  C48: [150, 350]
+  C49: [150, 350]
+  C50: [150, 350]
+  C51: [150, 350]
+  C52: [150, 350]
+  C53: [150, 350]
+  C54: [150, 350]
+  C55: [150, 350]
+  C56: [150, 350]
+  C57: [150, 350]
+  C58: [150, 350]
+  C59: [150, 350]
+  C60: [150, 350]
+  C61: [150, 350]
+  C62: [150, 350]
+  C63: [150, 350]
+  C64: [150, 350]
+  S1: [150, 350]
+  S2: [150, 350]
+  S3: [150, 350]
+  S4: [150, 350]
+  S5: [150, 350]
+  S6: [150, 350]
+  S7: [150, 350]
+  S8: [150, 350]
+  S9: [150, 350]
+  S10: [150, 350]
+  S11: [150, 350]
+  S12: [150, 350]
+  S13: [150, 350]
+  S14: [150, 350]
+  S15: [150, 350]
+  S16: [150, 350]
+  S17: [150, 350]
+  S18: [150, 350]
+  S19: [150, 350]
+  S20: [150, 350]
+  S21: [150, 350]
+  S22: [150, 350]
+  S23: [150, 350]
+  S24: [150, 350]
+  S25: [150, 350]
+  S26: [150, 350]
+  S27: [150, 350]
+  S28: [150, 350]
+  S29: [150, 350]
+  S30: [150, 350]
+  S31: [150, 350]
+  S32: [150, 350]
+  S33: [150, 350]
+  S34: [150, 350]
+  S35: [150, 350]
+  S36: [150, 350]
+  S37: [150, 350]
+  S38: [150, 350]
+  S39: [150, 350]
+  S40: [150, 350]
+  S41: [150, 350]
+  S42: [150, 350]
+  S43: [150, 350]
+  S44: [150, 350]
+  S45: [150, 350]
+  S46: [150, 350]
+  S47: [150, 350]
+  S48: [150, 350]
+  S49: [150, 350]
+  S50: [150, 350]
+  S51: [150, 350]
+  S52: [150, 350]
+  S53: [150, 350]
+  S54: [150, 350]
+  S55: [150, 350]
+  S56: [150, 350]
+  S57: [150, 350]
+  S58: [150, 350]
+  S59: [150, 350]
+  S60: [150, 350]
+  S61: [150, 350]
+  S62: [150, 350]
+  S63: [150, 350]
+  S64: [150, 350]

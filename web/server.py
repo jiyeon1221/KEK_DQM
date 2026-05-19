@@ -10,6 +10,7 @@ import os
 import queue
 import re
 import json
+import signal
 import threading
 import tempfile
 from pathlib import Path
@@ -410,6 +411,13 @@ class MonitRequest(BaseModel):
     modules: List[str] = []
     max_event: Optional[int] = None
     flags: List[str] = []
+    # AUXcut mode chosen in the freeform UI dropdown:
+    #   "none"   → no AUX cut (no --AUXcut)
+    #   "WC"     → WC-only beam-spot cut    (--AUXcut --AUXCutMode WC)
+    #   "WCHodo" → WC + hodoscope correlation cut (--AUXcut --AUXCutMode WCHodo)
+    # The flags list also carries "AUXcut" when mode != "none" so the rest
+    # of the pipeline (filename suffixes, run-history badges) keeps working.
+    aux_cut_mode: Optional[str] = None
 
 # ── Freeform LIVE process tracker ─────────────────────────────────────────────
 import subprocess as _subprocess
@@ -419,6 +427,14 @@ _freeform_live_run: Optional[int] = None
 _freeform_live_lock = threading.Lock()
 _freeform_live_log: _deque = _deque(maxlen=500)
 _freeform_live_log_lock = threading.Lock()
+
+# Tracker for the (blocking) non-LIVE monit run, so the browser can issue
+# /api/dqm/kill-blocking to abort it (SIGINT to the process group, like
+# Ctrl+C in a terminal). Kept separate from _freeform_live_proc so that
+# /api/dqm/live-status keeps reporting alive=False during a non-LIVE run.
+_freeform_blocking_proc: Optional[_subprocess.Popen] = None
+_freeform_blocking_run: Optional[int] = None
+_freeform_blocking_lock = threading.Lock()
 
 
 import re as _re
@@ -471,8 +487,15 @@ async def api_run_monit(req: MonitRequest):
     if req.max_event and req.max_event > 0:
         cmd.extend(["--MaxEvent", str(req.max_event)])
     for flag in req.flags:
-        if flag in ("LIVE", "AUXcut"):
+        if flag in ("LIVE", "AUXcut", "AUX"):
             cmd.append(f"--{flag}")
+    # Forward the AUXcut mode when an actual cut is requested. The C++ side
+    # currently parses this flag as a no-op (until the position-correlation
+    # cut is wired into TBaux::IsPassing), so all modes still produce the
+    # same cut for now; the plumbing exists so the next step can simply
+    # consume the mode without further server-side changes.
+    if req.aux_cut_mode and req.aux_cut_mode != "none":
+        cmd.extend(["--AUXCutMode", req.aux_cut_mode])
 
     generated_cmd = " ".join(cmd)
 
@@ -537,21 +560,86 @@ async def api_run_monit(req: MonitRequest):
             "canvases": [],
         }
 
-    # Non-LIVE: blocking run, wait for completion and return canvases.
+    # Non-LIVE: blocking run, but stream stdout+stderr line-by-line into the
+    # shared live-log deque so the browser's progress pane updates while the
+    # request is still in flight. The HTTP response stays open until monit
+    # exits; we then return canvases as before.
+    #
+    # We deliberately do NOT touch _freeform_live_proc here: that global
+    # tracks LIVE-mode runs, and /api/dqm/live-status must keep reporting
+    # alive=False so the page-reload restorer doesn't mistake a non-LIVE
+    # run for a LIVE one. Instead we use _freeform_blocking_proc, which the
+    # /api/dqm/kill-blocking endpoint targets when the user clicks STOP.
+    global _freeform_blocking_proc, _freeform_blocking_run
+
+    with _freeform_live_log_lock:
+        _freeform_live_log.clear()
+
     try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
+        proc = _subprocess.Popen(
+            cmd,
             cwd=str(DQM_DIR),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
+            stdout=_subprocess.PIPE,
+            stderr=_subprocess.STDOUT,
             env=monit_env,
+            preexec_fn=os.setpgrp,  # own process group → killpg works for STOP
+            text=True,
+            bufsize=1,
         )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=300)
-        output = stdout.decode(errors="replace") if stdout else ""
-    except asyncio.TimeoutError:
-        return JSONResponse({"error": "monit timed out (5 min)", "command": generated_cmd}, status_code=504)
+    except FileNotFoundError as e:
+        return JSONResponse({"error": str(e), "command": generated_cmd}, status_code=500)
     except Exception as e:
         return JSONResponse({"error": str(e), "command": generated_cmd}, status_code=500)
+
+    with _freeform_blocking_lock:
+        _freeform_blocking_proc = proc
+        _freeform_blocking_run = req.run_number
+
+    reader = threading.Thread(
+        target=_read_live_stdout, args=(proc,),
+        daemon=True, name="FreeformBlockingLog",
+    )
+    reader.start()
+
+    loop = asyncio.get_event_loop()
+    try:
+        exit_code = await loop.run_in_executor(None, lambda: proc.wait(timeout=300))
+    except _subprocess.TimeoutExpired:
+        proc.terminate()
+        try:
+            await loop.run_in_executor(None, lambda: proc.wait(timeout=5))
+        except _subprocess.TimeoutExpired:
+            proc.kill()
+            await loop.run_in_executor(None, proc.wait)
+        reader.join(timeout=2)
+        with _freeform_blocking_lock:
+            if _freeform_blocking_proc is proc:
+                _freeform_blocking_proc = None
+                _freeform_blocking_run = None
+        return JSONResponse(
+            {"error": "monit timed out (5 min)", "command": generated_cmd},
+            status_code=504,
+        )
+    except Exception as e:
+        with _freeform_blocking_lock:
+            if _freeform_blocking_proc is proc:
+                _freeform_blocking_proc = None
+                _freeform_blocking_run = None
+        return JSONResponse({"error": str(e), "command": generated_cmd}, status_code=500)
+
+    reader.join(timeout=2)
+
+    with _freeform_blocking_lock:
+        if _freeform_blocking_proc is proc:
+            _freeform_blocking_proc = None
+            _freeform_blocking_run = None
+
+    # Snapshot the tail of the streamed log for the response body. The
+    # full stream is already in the browser via /api/dqm/live-log, this
+    # is just so callers that don't poll the log still get something useful.
+    with _freeform_live_log_lock:
+        _tail = list(_freeform_live_log)[-50:]
+    output = "\n".join(_tail)
 
     prefix = f"Run{req.run_number}_{req.type}_{req.method}"
     if "AUXcut" in req.flags:
@@ -570,6 +658,40 @@ async def api_run_monit(req: MonitRequest):
             "type": req.type,
             "method": req.method,
         })
+
+    # When --AUX is set, TBaux dumps several auxiliary canvases as JSON
+    # under the prefix Run<N>_AUX_<method>[_AuxCut]_<canvas>.json:
+    #   method=WC         → wire-chamber position (fCanvas_WC)
+    #   method=Hodoscope  → 16x16 IntADC hit map (fCanvas_HodoIntADC)
+    #   method=Hodoscope  → 16x16 PeakADC hit map (fCanvas_HodoPeakADC)
+    # We collect them all so they appear as separate entries in the run
+    # browser, grouped by method.
+    if "AUX" in req.flags:
+        auxcut_set = "AUXcut" in req.flags
+        # group(1) = method (no underscores), group(2) = remainder after the
+        # mandatory underscore. We then check for the optional AuxCut_ infix.
+        aux_re = re.compile(
+            rf"^Run{req.run_number}_AUX_([^_]+)_(.+)\.json$"
+        )
+        for p in sorted(DQM_OUTPUT_DIR.glob(f"Run{req.run_number}_AUX_*.json")):
+            m = aux_re.match(p.name)
+            if not m:
+                continue
+            method = m.group(1)
+            rest = m.group(2)
+            has_auxcut = rest.startswith("AuxCut_")
+            if has_auxcut != auxcut_set:
+                # Skip files that don't match the current --AUXcut state
+                # (the directory may still contain leftovers from a previous
+                # run of the same RunNumber with the opposite AUXcut flag).
+                continue
+            canvas = rest[len("AuxCut_"):] if has_auxcut else rest
+            canvases.append({
+                "filename": p.name,
+                "canvas": canvas,
+                "type": "AUX",
+                "method": method,
+            })
 
     return {
         "command": generated_cmd,
@@ -620,6 +742,177 @@ async def api_kill_live():
         _freeform_live_run = None
 
     return {"ok": True, "run_number": run_number}
+
+
+@app.post("/api/dqm/kill-blocking")
+async def api_kill_blocking():
+    """Abort the in-flight non-LIVE monit run with SIGINT (Ctrl+C equivalent).
+
+    Sends SIGINT to the whole process group (the child was spawned with
+    setpgrp so it has its own group). If the process doesn't die within
+    a few seconds, escalate to SIGTERM and finally SIGKILL.
+
+    The /api/dqm/run-monit handler is still awaiting proc.wait() in an
+    executor thread; killing the process unblocks that wait, the handler
+    cleans up _freeform_blocking_proc itself, and the original POST
+    request returns to the browser with the (non-zero) exit code.
+    """
+    with _freeform_blocking_lock:
+        proc = _freeform_blocking_proc
+        run_number = _freeform_blocking_run
+
+    if proc is None or proc.poll() is not None:
+        return {"ok": True, "msg": "no blocking process running"}
+
+    def _signal_chain():
+        try:
+            pgid = os.getpgid(proc.pid)
+            os.killpg(pgid, signal.SIGINT)
+        except (ProcessLookupError, PermissionError):
+            return
+        try:
+            proc.wait(timeout=5)
+            return
+        except _subprocess.TimeoutExpired:
+            pass
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+            proc.wait(timeout=5)
+            return
+        except (ProcessLookupError, _subprocess.TimeoutExpired):
+            pass
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            proc.wait()
+        except ProcessLookupError:
+            pass
+
+    await asyncio.get_event_loop().run_in_executor(None, _signal_chain)
+
+    return {"ok": True, "run_number": run_number}
+
+
+def _enumerate_monit_processes() -> list[dict]:
+    """Find every running ``./monit`` process (excluding this web server).
+
+    Uses psutil instead of shell-parsing ``ps aux`` so we look at the actual
+    argv vector rather than a substring of the textual command line — that
+    keeps ``./monitor``, ``demonit_helper``, etc. from being mistaken for
+    monit. A process counts as ./monit iff:
+      * argv[0] is ``./monit`` exactly, OR
+      * argv[0]'s basename is ``monit`` AND its path is a relative ``./monit``
+        form (sometimes ps captures the resolved absolute path; in that case
+        we additionally accept the case where the executable's name is
+        ``monit`` to handle background runs launched via the project's
+        Makefile/shell wrappers).
+    Always skips our own pid so the kill endpoint can never SIGKILL the web
+    server itself.
+    """
+    try:
+        import psutil
+    except ImportError:
+        return []
+
+    own_pid = os.getpid()
+    procs: list[dict] = []
+    for p in psutil.process_iter(["pid", "name", "cmdline", "username"]):
+        try:
+            info = p.info
+            pid = info.get("pid")
+            if pid is None or pid == own_pid:
+                continue
+            cmdline = info.get("cmdline") or []
+            if not cmdline:
+                continue
+            argv0 = cmdline[0]
+            name = info.get("name") or ""
+            is_relative_monit = argv0 == "./monit"
+            is_absolute_monit = (
+                os.path.basename(argv0) == "monit" and name == "monit"
+            )
+            if not (is_relative_monit or is_absolute_monit):
+                continue
+            procs.append({
+                "pid": pid,
+                "username": info.get("username") or "",
+                "cmdline": " ".join(cmdline),
+                "argv0": argv0,
+            })
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+    return procs
+
+
+@app.get("/api/dqm/find-monit-processes")
+async def api_find_monit_processes():
+    """List every running ./monit process for the confirmation modal."""
+    procs = _enumerate_monit_processes()
+    return {"ok": True, "count": len(procs), "processes": procs}
+
+
+@app.post("/api/dqm/kill-all-monit")
+async def api_kill_all_monit():
+    """SIGTERM (then SIGKILL after a short grace period) every ./monit.
+
+    Re-enumerates inside this handler so the modal preview and the actual
+    kill list are validated against the same psutil snapshot (no TOCTOU
+    against a stale modal that the user left open for minutes). Skips our
+    own pid, never touches non-./monit processes, and reports a per-PID
+    success/failure result for the UI.
+    """
+    try:
+        import psutil
+        import signal as _signal_mod
+    except ImportError:
+        return {"ok": False, "error": "psutil not available", "killed_count": 0}
+
+    own_pid = os.getpid()
+    targets = _enumerate_monit_processes()
+
+    killed: list[int] = []
+    failed: list[dict] = []
+
+    for proc_info in targets:
+        pid = proc_info["pid"]
+        if pid == own_pid:
+            continue
+        try:
+            p = psutil.Process(pid)
+        except psutil.NoSuchProcess:
+            continue
+
+        try:
+            p.send_signal(_signal_mod.SIGTERM)
+        except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
+            failed.append({"pid": pid, "reason": str(e)})
+            continue
+
+        try:
+            p.wait(timeout=2.0)
+            killed.append(pid)
+            continue
+        except psutil.TimeoutExpired:
+            pass
+
+        try:
+            p.send_signal(_signal_mod.SIGKILL)
+            p.wait(timeout=2.0)
+            killed.append(pid)
+        except (psutil.NoSuchProcess, psutil.TimeoutExpired, psutil.AccessDenied) as e:
+            failed.append({"pid": pid, "reason": str(e)})
+
+    msg = f"Killed {len(killed)} ./monit process(es)"
+    if failed:
+        msg += f"; {len(failed)} failed"
+
+    return {
+        "ok": True,
+        "message": msg,
+        "killed_count": len(killed),
+        "failed_count": len(failed),
+        "killed_pids": killed,
+        "failed": failed,
+    }
 
 
 @app.get("/api/dqm/live-status")

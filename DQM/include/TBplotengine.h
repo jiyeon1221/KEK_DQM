@@ -68,6 +68,17 @@ public:
   void init();
   void init_full();
   void init_Generic();
+  // Hardcoded MCPPMT (C1..C64 + S1..S64) heatmap initializer. Mirrors
+  // init_Generic() (which serves the 9-tower full mode) but for MCPPMT's
+  // 8x8 channel layout — keep both helpers separate so a future SiPM heatmap
+  // can land alongside without entangling tower logic.
+  void init_MCPPMT();
+  // Single-canvas grid of per-tower IntADC/PeakADC distributions for --type
+  // module. Tower discovery, grid sizing and pad placement all come from the
+  // loaded mapping (TButility), with an optional --module <prefix> filter so
+  // CERN-style "show one module's 4 towers" still works alongside the KEK
+  // "show all 9 towers of the single module" case.
+  void init_module();
   void PrintInfo();
 
   void Fill(TBevt<TBwaveform> anEvent);
@@ -164,6 +175,13 @@ private:
 
   std::vector<PlotInfo> fPlotter_Ceren;
   std::vector<PlotInfo> fPlotter_Scint;
+
+  // Grid dimensions for --type module (discovered in init_module()). gridX
+  // covers info.row (1..N from left to right), gridY covers info.col (1..N
+  // from bottom to top). Both stay 0 outside module mode so accidental reads
+  // are easy to spot.
+  int fGridX_module = 0;
+  int fGridY_module = 0;
 
 };
 

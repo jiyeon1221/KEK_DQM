@@ -39,6 +39,11 @@ public:
   mod_info GetInfo(TBcid cid) const;
   mod_info GetInfo(TString name) const;
 
+  // Const view onto the full name -> DQM info map. Used by TBplotengine to
+  // enumerate the loaded mapping for data-driven discovery (so --type full
+  // doesn't have to hardcode a tower-name list and grid size).
+  const std::map<TString, mod_info>& GetNameInfo() const { return mapping_NAME_INFO; }
+
   std::vector<int> GetUniqueMID(std::vector<TBcid> aCID);
   std::vector<int> GetUniqueMID(std::vector<TBcid> aCID_1, std::vector<TBcid> aCID_2);
   std::vector<int> GetUniqueMID(std::vector<int> vec_1, std::vector<int> vec_2);

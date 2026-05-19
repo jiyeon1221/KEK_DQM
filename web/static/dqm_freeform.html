@@ -117,14 +117,118 @@
   .canvas-item.active { background: #2a3148; border-color: #4f8ef7; color: #4f8ef7; }
   .canvas-item .meta { display: block; font-size: 10px; color: #7a7f99; margin-top: 1px; }
 
-  /* ── Main draw area ── */
+  /* ── Sidebar footer (Kill-all / Close-all buttons, pinned bottom) ── */
+  #sidebar-footer {
+    padding: 10px 12px; border-top: 1px solid #2c2f3e;
+    display: flex; flex-direction: column; gap: 6px; flex-shrink: 0;
+  }
+  .sidebar-action-btn {
+    width: 100%; padding: 8px 10px; border: none; border-radius: 4px;
+    font-size: 11px; font-weight: 600; cursor: pointer; letter-spacing: 0.3px;
+  }
+  .sidebar-action-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .sidebar-action-btn.neutral { background: #2c2f3e; color: #dde1f0; }
+  .sidebar-action-btn.neutral:hover:not(:disabled) { background: #3a3f55; }
+  .sidebar-action-btn.danger { background: #c62828; color: #fff; }
+  .sidebar-action-btn.danger:hover:not(:disabled) { background: #b71c1c; }
+
+  /* ── Main draw area (now a positioned canvas hosting floating windows) ── */
   #main { flex: 1; padding: 12px; overflow: hidden; display: flex; flex-direction: column; }
   #main header { font-size: 12px; color: #7a7f99; margin-bottom: 8px;
-                 padding-bottom: 8px; border-bottom: 1px solid #2c2f3e; }
-  #draw { flex: 1; background: #fff; border-radius: 6px; display: none; }
-  #draw.visible { display: block; }
-  #draw-placeholder { flex: 1; display: flex; align-items: center; justify-content: center;
-                      color: #7a7f99; font-size: 13px; border: 1px dashed #2c2f3e; border-radius: 6px; }
+                 padding-bottom: 8px; border-bottom: 1px solid #2c2f3e;
+                 display: flex; align-items: center; justify-content: space-between; }
+  #main header .window-count { font-size: 11px; color: #7a7f99; }
+  #draw-area {
+    flex: 1; position: relative; border: 1px dashed #2c2f3e; border-radius: 6px;
+    background: #0a0c14; overflow: hidden;
+  }
+  #draw-welcome {
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    color: #7a7f99; font-size: 13px; pointer-events: none; text-align: center; padding: 20px;
+  }
+  #draw-area.has-windows #draw-welcome { display: none; }
+
+  /* Floating plot windows (drag-to-move, resize from bottom-right corner). */
+  .plot-window {
+    position: absolute; background: #fff; border: 1px solid #2c2f3e;
+    border-radius: 6px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    min-width: 320px; min-height: 240px;
+    display: flex; flex-direction: column; z-index: 1;
+    resize: none; overflow: hidden;
+  }
+  .plot-window.active { z-index: 100; box-shadow: 0 6px 20px rgba(79, 142, 247, 0.45); }
+  .plot-window-header {
+    background: linear-gradient(135deg, #1e3a5f 0%, #2a3148 100%);
+    color: #dde1f0; padding: 6px 10px;
+    border-radius: 6px 6px 0 0;
+    display: flex; align-items: center; justify-content: space-between;
+    cursor: move; user-select: none;
+    font-size: 12px; font-weight: 500; flex-shrink: 0;
+  }
+  .plot-window-title {
+    flex: 1; margin-right: 8px; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap;
+  }
+  .plot-window-close {
+    width: 20px; height: 20px; border: none; border-radius: 50%;
+    background: #ff5f56; color: #fff; cursor: pointer;
+    font-size: 12px; font-weight: bold; line-height: 1;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .plot-window-close:hover { background: #ff3b30; }
+  .plot-window-body {
+    flex: 1; background: #fff; overflow: hidden; position: relative;
+  }
+  .plot-window-resize {
+    position: absolute; bottom: 0; right: 0;
+    width: 16px; height: 16px; cursor: nwse-resize;
+    background: linear-gradient(-45deg, transparent 0%, transparent 40%, #888 40%, #888 60%, transparent 60%);
+    z-index: 5;
+  }
+  .plot-window-loading, .plot-window-error {
+    position: absolute; inset: 0; display: flex; align-items: center;
+    justify-content: center; padding: 20px; text-align: center; font-size: 12px;
+  }
+  .plot-window-loading { color: #7a7f99; }
+  .plot-window-error { color: #c62828; }
+
+  /* Kill confirmation modal. */
+  .modal-backdrop {
+    display: none; position: fixed; inset: 0; z-index: 1000;
+    background: rgba(0, 0, 0, 0.6); align-items: center; justify-content: center;
+  }
+  .modal-backdrop.visible { display: flex; }
+  .modal-content {
+    background: #1a1d27; color: #dde1f0; border: 1px solid #2c2f3e;
+    border-radius: 8px; padding: 18px 20px; width: 580px; max-width: 95vw;
+    max-height: 80vh; display: flex; flex-direction: column; gap: 10px;
+  }
+  .modal-content h3 { font-size: 14px; color: #ffb74d; }
+  .modal-content p { font-size: 12px; color: #c5cae9; }
+  .modal-content .modal-list {
+    flex: 1; min-height: 80px; max-height: 320px; overflow-y: auto;
+    background: #0f1117; border: 1px solid #2c2f3e; border-radius: 4px;
+    padding: 8px; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 11px;
+  }
+  .modal-list .proc-row {
+    background: #12141e; margin-bottom: 4px; padding: 6px 8px;
+    border-radius: 3px; border-left: 3px solid #c62828;
+  }
+  .modal-list .proc-row .pid { color: #ff8a80; font-weight: 600; }
+  .modal-list .proc-row .cmd { color: #c5cae9; margin-top: 3px; word-break: break-all; }
+  .modal-buttons { display: flex; gap: 8px; justify-content: flex-end; }
+  .modal-buttons button {
+    padding: 7px 14px; border: none; border-radius: 4px;
+    font-size: 12px; font-weight: 600; cursor: pointer;
+  }
+  .modal-buttons .btn-cancel { background: #444; color: #fff; }
+  .modal-buttons .btn-cancel:hover { background: #555; }
+  .modal-buttons .btn-confirm-kill { background: #c62828; color: #fff; }
+  .modal-buttons .btn-confirm-kill:hover:not(:disabled) { background: #b71c1c; }
+  .modal-buttons button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .modal-error { font-size: 11px; color: #ff8a80; min-height: 14px; }
+
   .empty { color: #7a7f99; font-size: 13px; padding: 20px; text-align: center; }
 </style>
 </head>
@@ -170,15 +274,23 @@
           <label>MaxEvt</label>
           <input id="inp-maxevent" type="number" placeholder="(all)" />
         </div>
+        <div class="cmd-row">
+          <label>AUXcut</label>
+          <select id="opt-AUXcut">
+            <option value="none" selected>none</option>
+            <option value="WC">WC only</option>
+            <option value="WCHodo">WC + hodo</option>
+          </select>
+        </div>
         <div class="cmd-flags">
-          <label><input type="checkbox" id="flag-AUXcut" /> AUXcut</label>
+          <label><input type="checkbox" id="flag-AUX" /> AUX</label>
           <label><input type="checkbox" id="flag-LIVE" /> LIVE</label>
         </div>
         <div class="cmd-preview">
           <span>Generated:</span> <span id="cmd-text"></span>
         </div>
         <button id="exec-btn" onclick="executeMonit()">EXECUTE ./monit</button>
-        <button id="kill-live-btn" onclick="killLive()">STOP LIVE</button>
+        <button id="kill-live-btn" onclick="stopMonit()">STOP LIVE</button>
         <div id="exec-status"></div>
       </div>
     </div>
@@ -198,12 +310,50 @@
       </div>
       <div id="run-list"><div class="empty">로딩 중...</div></div>
     </div>
+
+    <!-- Sidebar footer: dangerous ops live here so they're far from EXECUTE -->
+    <div id="sidebar-footer">
+      <button id="close-all-btn" class="sidebar-action-btn neutral"
+              onclick="closeAllPlotWindows()" disabled
+              title="Close every open plot window (does not affect run history)">
+        ✕ Close All Canvases
+      </button>
+      <button id="kill-all-btn" class="sidebar-action-btn danger"
+              onclick="showKillAllModal()"
+              title="SIGTERM every running ./monit process on this machine">
+        ☠ Kill All ./monit
+      </button>
+    </div>
   </div>
 
   <div id="main">
-    <header id="title">캔버스를 선택하세요</header>
-    <div id="draw-placeholder">왼쪽에서 Run을 펼치고 캔버스를 클릭하세요</div>
-    <div id="draw"></div>
+    <header>
+      <span id="title">캔버스를 선택하세요</span>
+      <span class="window-count" id="window-count" style="display:none;">Windows: 0</span>
+    </header>
+    <div id="draw-area">
+      <div id="draw-welcome">왼쪽에서 Run을 펼치고 캔버스를 클릭하세요<br/>여러 캔버스를 동시에 열 수 있습니다 (드래그/리사이즈 가능)</div>
+    </div>
+  </div>
+</div>
+
+<!-- Confirmation modal: lists every targeted ./monit before we send SIGTERM. -->
+<div id="kill-modal" class="modal-backdrop" onclick="onKillBackdropClick(event)">
+  <div class="modal-content">
+    <h3>⚠️ Kill ALL ./monit processes</h3>
+    <p>This will terminate every <code>./monit</code> process this user owns on this machine,
+       including any blocking/LIVE run you may have just started. The web server is
+       always excluded.</p>
+    <div id="kill-modal-list" class="modal-list">
+      <div style="text-align:center;color:#7a7f99;padding:20px;">Loading processes…</div>
+    </div>
+    <div class="modal-error" id="kill-modal-error"></div>
+    <div class="modal-buttons">
+      <button class="btn-cancel" onclick="hideKillAllModal()">Cancel</button>
+      <button id="kill-modal-confirm" class="btn-confirm-kill" onclick="confirmKillAllMonit()">
+        Kill All
+      </button>
+    </div>
   </div>
 </div>
 
@@ -253,10 +403,18 @@ function getParams() {
   const modules = moduleRaw ? moduleRaw.split(/\s+/) : [];
   const maxEvt = parseInt(document.getElementById('inp-maxevent').value) || null;
   const flags = [];
-  ['AUXcut', 'LIVE'].forEach(f => {
+  ['AUX', 'LIVE'].forEach(f => {
     if (document.getElementById('flag-' + f).checked) flags.push(f);
   });
-  return { run_number: run, type, method, modules, max_event: maxEvt, flags };
+  // AUXcut is now a 3-option dropdown: none / WC / WCHodo. Anything other
+  // than 'none' turns on the AUXcut flag; the mode itself is forwarded as
+  // a separate field so the server can pass --AUXCutMode through to monit.
+  const auxCutMode = document.getElementById('opt-AUXcut').value;
+  if (auxCutMode !== 'none') flags.push('AUXcut');
+  return {
+    run_number: run, type, method, modules, max_event: maxEvt,
+    flags, aux_cut_mode: auxCutMode,
+  };
 }
 
 function updatePreview() {
@@ -266,6 +424,9 @@ function updatePreview() {
   if (p.modules.length) cmd += ` --module ${p.modules.join(' ')}`;
   if (p.max_event) cmd += ` --MaxEvent ${p.max_event}`;
   p.flags.forEach(f => cmd += ` --${f}`);
+  if (p.aux_cut_mode && p.aux_cut_mode !== 'none') {
+    cmd += ` --AUXCutMode ${p.aux_cut_mode}`;
+  }
   document.getElementById('cmd-text').textContent = cmd;
 }
 
@@ -279,6 +440,11 @@ let _liveRunNumber = null;
 let _livePollTimer = null;
 let _logPollTimer = null;
 let _logOffset = 0;
+// Tracks whether a monit run is currently in flight, and which kind:
+//   null       → idle
+//   'live'     → --LIVE run, STOP routes to /api/dqm/kill-live (sentinel)
+//   'blocking' → non-LIVE run, STOP routes to /api/dqm/kill-blocking (SIGINT)
+let _runMode = null;
 
 function setLiveMode(active) {
   const killBtn = document.getElementById('kill-live-btn');
@@ -286,8 +452,22 @@ function setLiveMode(active) {
   const logWrap = document.getElementById('live-log-wrap');
   killBtn.style.display = active ? 'block' : 'none';
   killBtn.disabled = false;
+  killBtn.textContent = 'STOP LIVE';
   execBtn.disabled = active;
   logWrap.classList.toggle('visible', active);
+}
+
+// Lighter-weight counterpart to setLiveMode for the non-LIVE branch.
+// We deliberately do NOT toggle the log pane: the caller already shows
+// it on EXECUTE and we want the final progress lines to remain visible
+// after the run ends.
+function setBlockingMode(active) {
+  const killBtn = document.getElementById('kill-live-btn');
+  const execBtn = document.getElementById('exec-btn');
+  killBtn.style.display = active ? 'block' : 'none';
+  killBtn.disabled = false;
+  killBtn.textContent = active ? 'STOP' : 'STOP LIVE';
+  execBtn.disabled = active;
 }
 
 function clearLog() {
@@ -351,6 +531,7 @@ function startLivePoll() {
       if (!d.alive) {
         stopLivePoll();
         stopLogPoll();
+        _runMode = null;
         setLiveMode(false);
         document.getElementById('exec-status').textContent = '⏹ LIVE 종료됨';
         document.getElementById('exec-status').style.color = '#7a7f99';
@@ -382,10 +563,41 @@ async function killLive() {
     status.textContent = '❌ ' + e.message;
     status.style.color = '#f44336';
   } finally {
+    _runMode = null;
     setLiveMode(false);
     killBtn.textContent = 'STOP LIVE';
     loadRuns();
   }
+}
+
+// Abort the currently running non-LIVE monit (SIGINT to its process group,
+// like Ctrl+C in a shell). The /api/dqm/run-monit POST that's still
+// awaiting the subprocess will return shortly with a non-zero exit code,
+// at which point executeMonit's normal completion handler re-enables the
+// EXECUTE button. We do NOT call stopLogPoll / setBlockingMode here:
+// the in-flight executeMonit handler does that for us when the response
+// comes back, which keeps the cleanup ordering consistent with a natural
+// (non-aborted) exit.
+async function killBlocking() {
+  const killBtn = document.getElementById('kill-live-btn');
+  const status = document.getElementById('exec-status');
+  killBtn.disabled = true;
+  killBtn.textContent = '종료 중...';
+  try {
+    await fetch('/api/dqm/kill-blocking', { method: 'POST' });
+    status.textContent = '⏹ 사용자 중단 (SIGINT 전송됨, 프로세스 종료 대기 중...)';
+    status.style.color = '#7a7f99';
+  } catch (e) {
+    status.textContent = '❌ ' + e.message;
+    status.style.color = '#f44336';
+  }
+}
+
+// Single click handler for the STOP / STOP LIVE button. Routes to the
+// right kill endpoint depending on which mode of run is active.
+function stopMonit() {
+  if (_runMode === 'live')     return killLive();
+  if (_runMode === 'blocking') return killBlocking();
 }
 
 async function executeMonit() {
@@ -394,12 +606,30 @@ async function executeMonit() {
 
   const btn = document.getElementById('exec-btn');
   const status = document.getElementById('exec-status');
+  const logWrap = document.getElementById('live-log-wrap');
   btn.disabled = true;
   btn.textContent = '실행 중...';
   status.textContent = '';
   stopLivePoll();
+  stopLogPoll();
 
   const isLive = p.flags.includes('LIVE');
+
+  // Show the progress pane and stream stdout/stderr for every run, not
+  // just LIVE. The server pushes lines into the same live-log deque
+  // whether or not --LIVE was passed.
+  logWrap.classList.add('visible');
+  startLogPoll();
+
+  // For non-LIVE: show the STOP button immediately so the user can abort
+  // a wrongly-configured run while monit is still working. (For LIVE we
+  // do this after the fetch succeeds, since LIVE returns ~instantly with
+  // a PID and we want to keep setLiveMode as the single source of truth
+  // for the LIVE-mode UI state.)
+  if (!isLive) {
+    _runMode = 'blocking';
+    setBlockingMode(true);
+  }
 
   try {
     const res = await fetch('/api/dqm/run-monit', {
@@ -409,6 +639,8 @@ async function executeMonit() {
     });
     const data = await res.json();
     if (data.error) {
+      stopLogPoll();
+      if (!isLive) { _runMode = null; setBlockingMode(false); }
       status.textContent = '❌ ' + data.error;
       status.style.color = '#f44336';
       return;
@@ -416,17 +648,29 @@ async function executeMonit() {
 
     if (data.live) {
       _liveRunNumber = data.run_number;
+      _runMode = 'live';
       status.textContent = `⚡ LIVE 실행 중 (Run ${data.run_number}, PID ${data.pid})`;
       status.style.color = '#ffb74d';
       setLiveMode(true);
       startLivePoll();
-      startLogPoll();
+      // startLogPoll() was already called above.
     } else {
-      status.textContent = `✅ 완료 (exit ${data.exit_code}) · ${data.canvases.length}개 캔버스`;
-      status.style.color = '#8bc34a';
+      stopLogPoll();
+      _runMode = null;
+      setBlockingMode(false);
+      const exit = data.exit_code;
+      if (exit === 0) {
+        status.textContent = `✅ 완료 (exit ${exit}) · ${data.canvases.length}개 캔버스`;
+        status.style.color = '#8bc34a';
+      } else {
+        status.textContent = `⚠ 종료 (exit ${exit}) · 로그 확인`;
+        status.style.color = '#ffb74d';
+      }
       loadRuns();
     }
   } catch (e) {
+    stopLogPoll();
+    if (!isLive) { _runMode = null; setBlockingMode(false); }
     status.textContent = '❌ ' + e.message;
     status.style.color = '#f44336';
   } finally {
@@ -437,9 +681,290 @@ async function executeMonit() {
   }
 }
 
-/* ── Run browser ────────────────────────────────────────── */
-let activeCanvasEl = null;
+/* ── Floating plot windows ──────────────────────────────────
+   Each canvas click spawns a new draggable/resizable window inside
+   #draw-area. Windows are tracked in _windows so closeAllPlotWindows
+   can wipe them all at once. JSROOT cleanup is run per-window before
+   re-draws to avoid leaking ROOT objects between resizes/reloads.
+*/
+const _windows = new Map();
+let _windowCounter = 0;
+let _activeWindowId = null;
 
+function updateWindowCount() {
+  const n = _windows.size;
+  const countEl = document.getElementById('window-count');
+  const closeAllBtn = document.getElementById('close-all-btn');
+  const drawArea = document.getElementById('draw-area');
+  if (n > 0) {
+    countEl.textContent = `Windows: ${n}`;
+    countEl.style.display = '';
+    drawArea.classList.add('has-windows');
+    closeAllBtn.disabled = false;
+  } else {
+    countEl.style.display = 'none';
+    drawArea.classList.remove('has-windows');
+    closeAllBtn.disabled = true;
+  }
+}
+
+function makeWindowActive(id) {
+  document.querySelectorAll('.plot-window').forEach(w => w.classList.remove('active'));
+  const el = document.getElementById(id);
+  if (el) {
+    el.classList.add('active');
+    _activeWindowId = id;
+  }
+}
+
+function closePlotWindow(id) {
+  const data = _windows.get(id);
+  if (!data) return;
+  // Tear down JSROOT painters before yanking the DOM so canvases / web-gl
+  // contexts don't linger.
+  const body = data.element.querySelector('.plot-window-body');
+  if (body) {
+    try { JSROOT.cleanup(body); } catch (_) {}
+  }
+  if (data.resizeObserver) {
+    try { data.resizeObserver.disconnect(); } catch (_) {}
+  }
+  data.element.remove();
+  _windows.delete(id);
+  if (_activeWindowId === id) _activeWindowId = null;
+  updateWindowCount();
+}
+
+function closeAllPlotWindows() {
+  if (_windows.size === 0) return;
+  // Snapshot first so closePlotWindow can mutate the map safely.
+  const ids = Array.from(_windows.keys());
+  ids.forEach(closePlotWindow);
+}
+
+function makeWindowDraggable(el) {
+  const header = el.querySelector('.plot-window-header');
+  let dragging = false, startX = 0, startY = 0, startLeft = 0, startTop = 0;
+
+  header.addEventListener('mousedown', (e) => {
+    if (e.target.closest('.plot-window-close')) return;
+    dragging = true;
+    startX = e.clientX; startY = e.clientY;
+    startLeft = parseInt(el.style.left) || 0;
+    startTop  = parseInt(el.style.top)  || 0;
+    header.style.cursor = 'grabbing';
+    e.preventDefault();
+  });
+
+  document.addEventListener('mousemove', (e) => {
+    if (!dragging) return;
+    const area = document.getElementById('draw-area').getBoundingClientRect();
+    const win  = el.getBoundingClientRect();
+    const maxLeft = area.width  - win.width;
+    const maxTop  = area.height - win.height;
+    const newLeft = Math.max(0, Math.min(startLeft + (e.clientX - startX), maxLeft));
+    const newTop  = Math.max(0, Math.min(startTop  + (e.clientY - startY), maxTop));
+    el.style.left = `${newLeft}px`;
+    el.style.top  = `${newTop}px`;
+  });
+
+  document.addEventListener('mouseup', () => {
+    if (dragging) { dragging = false; header.style.cursor = 'move'; }
+  });
+}
+
+function makeWindowResizable(el, id) {
+  const handle = el.querySelector('.plot-window-resize');
+  let resizing = false, startX = 0, startY = 0, startW = 0, startH = 0;
+
+  handle.addEventListener('mousedown', (e) => {
+    resizing = true;
+    startX = e.clientX; startY = e.clientY;
+    const cs = window.getComputedStyle(el);
+    startW = parseInt(cs.width);
+    startH = parseInt(cs.height);
+    e.preventDefault();
+    e.stopPropagation();
+  });
+
+  document.addEventListener('mousemove', (e) => {
+    if (!resizing) return;
+    const newW = Math.max(320, startW + (e.clientX - startX));
+    const newH = Math.max(240, startH + (e.clientY - startY));
+    el.style.width  = `${newW}px`;
+    el.style.height = `${newH}px`;
+  });
+
+  document.addEventListener('mouseup', () => {
+    if (!resizing) return;
+    resizing = false;
+    // Defer redraw so JSROOT picks up the new body dimensions.
+    setTimeout(() => redrawWindow(id), 50);
+  });
+
+  // Also auto-redraw on any resize event (covers programmatic resizes).
+  if (window.ResizeObserver) {
+    const ro = new ResizeObserver(() => {
+      if (resizing) return; // mouseup handler will trigger it
+      setTimeout(() => redrawWindow(id), 50);
+    });
+    ro.observe(el);
+    const data = _windows.get(id);
+    if (data) data.resizeObserver = ro;
+  }
+}
+
+async function redrawWindow(id) {
+  const data = _windows.get(id);
+  if (!data) return;
+  const body = data.element.querySelector('.plot-window-body');
+  if (!body || !data.lastObj) return;
+  try {
+    await JSROOT.cleanup(body);
+    await JSROOT.draw(body, data.lastObj, '');
+  } catch (_) { /* swallow; resize-only redraw, not critical */ }
+}
+
+async function createPlotWindow(filename, canvasName, type, method, auxcut, runNum) {
+  _windowCounter += 1;
+  const id = `plot-window-${_windowCounter}`;
+
+  // Cascade the position so windows don't pile up exactly on top of each other.
+  const cycle = 10;
+  const idx = (_windowCounter - 1) % cycle;
+  const cycleN = Math.floor((_windowCounter - 1) / cycle);
+  const left = 20 + cycleN * 18 + idx * 28;
+  const top  = 20 + cycleN * 18 + idx * 28;
+
+  const label = `${canvasName}  ·  Run ${runNum}  ·  ${type}/${method}` + (auxcut ? '  · AUXcut' : '');
+
+  const el = document.createElement('div');
+  el.className = 'plot-window';
+  el.id = id;
+  el.style.left = `${left}px`;
+  el.style.top  = `${top}px`;
+  el.style.width  = '640px';
+  el.style.height = '480px';
+  el.innerHTML = `
+    <div class="plot-window-header" title="Drag to move">
+      <div class="plot-window-title">${label}</div>
+      <button class="plot-window-close" title="Close" onclick="closePlotWindow('${id}')">×</button>
+    </div>
+    <div class="plot-window-body">
+      <div class="plot-window-loading">Loading ${canvasName}…</div>
+    </div>
+    <div class="plot-window-resize" title="Drag to resize"></div>
+  `;
+  document.getElementById('draw-area').appendChild(el);
+
+  _windows.set(id, {
+    element: el, filename, canvasName, lastObj: null, resizeObserver: null,
+  });
+
+  makeWindowActive(id);
+  makeWindowDraggable(el);
+  makeWindowResizable(el, id);
+  el.addEventListener('mousedown', () => makeWindowActive(id));
+  updateWindowCount();
+
+  // Fetch JSON + draw. Errors are kept window-local instead of overwriting
+  // the page title (previous behaviour) so other windows aren't disturbed.
+  const body = el.querySelector('.plot-window-body');
+  try {
+    const r = await fetch(`/dqm-output/${filename}?t=${Date.now()}`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const text = await r.text();
+    const obj = JSROOT.parse(text);
+    if (!obj) throw new Error('Failed to parse ROOT JSON');
+    body.innerHTML = '';
+    _windows.get(id).lastObj = obj;
+    await JSROOT.draw(body, obj, '');
+  } catch (e) {
+    body.innerHTML = `<div class="plot-window-error">오류: ${e.message}</div>`;
+  }
+}
+
+/* ── Kill-all-monit confirmation modal ─────────────────────── */
+async function showKillAllModal() {
+  const modal = document.getElementById('kill-modal');
+  const list  = document.getElementById('kill-modal-list');
+  const err   = document.getElementById('kill-modal-error');
+  const confirm = document.getElementById('kill-modal-confirm');
+  err.textContent = '';
+  modal.classList.add('visible');
+  list.innerHTML = '<div style="text-align:center;color:#7a7f99;padding:20px;">Loading processes…</div>';
+  confirm.disabled = true;
+  confirm.textContent = 'Kill All';
+
+  try {
+    const r = await fetch('/api/dqm/find-monit-processes');
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error || 'enumeration failed');
+    if (d.count === 0) {
+      list.innerHTML = '<div style="text-align:center;color:#7a7f99;padding:20px;">No ./monit processes running.</div>';
+      confirm.disabled = true;
+    } else {
+      const rows = d.processes.map(p => `
+        <div class="proc-row">
+          <span class="pid">PID ${p.pid}</span>
+          <span style="color:#7a7f99;font-size:10px;margin-left:8px;">${p.username}</span>
+          <div class="cmd">${escapeHtml(p.cmdline)}</div>
+        </div>
+      `).join('');
+      list.innerHTML = `<div style="margin-bottom:6px;color:#ffb74d;">Found ${d.count} process(es):</div>${rows}`;
+      confirm.disabled = false;
+    }
+  } catch (e) {
+    list.innerHTML = `<div style="text-align:center;color:#c62828;padding:20px;">Error: ${e.message}</div>`;
+    confirm.disabled = true;
+  }
+}
+
+function hideKillAllModal() {
+  document.getElementById('kill-modal').classList.remove('visible');
+}
+
+function onKillBackdropClick(e) {
+  if (e.target.id === 'kill-modal') hideKillAllModal();
+}
+
+async function confirmKillAllMonit() {
+  const confirm = document.getElementById('kill-modal-confirm');
+  const err = document.getElementById('kill-modal-error');
+  confirm.disabled = true;
+  confirm.textContent = 'Killing…';
+  err.textContent = '';
+  try {
+    const r = await fetch('/api/dqm/kill-all-monit', { method: 'POST' });
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error || 'kill failed');
+    hideKillAllModal();
+    const status = document.getElementById('exec-status');
+    if (status) {
+      status.textContent = `☠ ${d.message}`;
+      status.style.color = d.failed_count > 0 ? '#ffb74d' : '#8bc34a';
+    }
+    // If the kill nuked a freeform LIVE/blocking run, the polls notice on
+    // their own tick — but pre-clear the local state so the UI snaps back.
+    _runMode = null;
+    setLiveMode(false);
+    setBlockingMode(false);
+    loadRuns();
+  } catch (e) {
+    err.textContent = e.message;
+  } finally {
+    confirm.disabled = false;
+    confirm.textContent = 'Kill All';
+  }
+}
+
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+/* ── Run browser ────────────────────────────────────────── */
 async function loadRuns() {
   const list = document.getElementById('run-list');
   try {
@@ -478,12 +1003,13 @@ async function loadRuns() {
         let metaText = `${c.type} · ${c.method}`;
         if (c.auxcut) metaText += ' · AUXcut';
         item.innerHTML = `${c.canvas}<span class="meta">${metaText}</span>`;
+        // Each click spawns a new floating window so the user can compare
+        // multiple canvases side-by-side. Re-clicking the same item is fine
+        // — we treat them as independent panes (close manually via the X
+        // button, or sweep them all with the sidebar's "Close All Canvases").
         item.onclick = (e) => {
           e.stopPropagation();
-          if (activeCanvasEl) activeCanvasEl.classList.remove('active');
-          item.classList.add('active');
-          activeCanvasEl = item;
-          drawCanvas(c.filename, c.canvas, c.type, c.method, c.auxcut, run.run_number);
+          createPlotWindow(c.filename, c.canvas, c.type, c.method, c.auxcut, run.run_number);
         };
         canvasDiv.appendChild(item);
       });
@@ -492,25 +1018,6 @@ async function loadRuns() {
     });
   } catch (e) {
     list.innerHTML = `<div class="empty">로드 실패: ${e.message}</div>`;
-  }
-}
-
-async function drawCanvas(filename, canvas, type, method, auxcut, runNum) {
-  const label = `${canvas}  ·  Run ${runNum}  ·  ${type}/${method}` + (auxcut ? '  · AUXcut' : '');
-  document.getElementById('title').textContent = label;
-  try {
-    const r = await fetch(`/dqm-output/${filename}?t=${Date.now()}`);
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    const text = await r.text();
-    const obj = JSROOT.parse(text);
-    if (!obj) throw new Error('Failed to parse ROOT JSON');
-    const drawEl = document.getElementById('draw');
-    document.getElementById('draw-placeholder').style.display = 'none';
-    drawEl.classList.add('visible');
-    await JSROOT.cleanup(drawEl);
-    await JSROOT.draw(drawEl, obj, '');
-  } catch (e) {
-    document.getElementById('title').textContent = `오류: ${e.message}`;
   }
 }
 
@@ -533,6 +1040,7 @@ loadRuns();
     const d = await r.json();
     if (d.alive) {
       _liveRunNumber = d.run_number;
+      _runMode = 'live';
       const status = document.getElementById('exec-status');
       status.textContent = `⚡ LIVE 실행 중 (Run ${d.run_number})`;
       status.style.color = '#ffb74d';

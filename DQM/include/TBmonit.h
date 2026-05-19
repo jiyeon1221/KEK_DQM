@@ -49,6 +49,10 @@ private:
   bool fDraw;
   bool fAuxPlotting;
   bool fAuxCut;
+  // AUXcut mode: "WC" (default — WC beam-spot cut only) or "WCHodo"
+  // (additionally applies the WC↔hodoscope inclination cut). Set via
+  // --AUXCutMode and forwarded to TBaux::SetAUXCutMode().
+  std::string fAuxCutMode;
 };
 
 #endif

@@ -38,3 +38,6 @@ toydataset/
 # models — 에이전트 폴더 구조만 유지, 내용물 전체 제외
 models/*/**
 !models/*/.gitkeep
+
+# position scan 결과 — 사용 안 함
+position_scan_results/

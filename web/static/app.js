@@ -288,15 +288,32 @@ function appendToolError(toolName, errorMsg, attempts) {
 
   const retryRow = document.createElement('div');
   retryRow.className = 'retry-row';
+
   const retryBtn = document.createElement('button');
   retryBtn.className = 'inline-retry-btn';
   retryBtn.textContent = '↻ 다시 시도';
-  retryBtn.onclick = () => {
+
+  const skipBtn = document.createElement('button');
+  skipBtn.className = 'inline-retry-btn inline-skip-btn';
+  skipBtn.textContent = '→ 다음 단계로';
+
+  const disableBoth = () => {
     retryBtn.disabled = true;
+    skipBtn.disabled = true;
+  };
+  retryBtn.onclick = () => {
+    disableBoth();
     retryBtn.textContent = '재시도 중...';
     send({ type: 'user_input', content: 'retry' });
   };
+  skipBtn.onclick = () => {
+    disableBoth();
+    skipBtn.textContent = '건너뜀...';
+    send({ type: 'user_input', content: 'skip' });
+  };
+
   retryRow.appendChild(retryBtn);
+  retryRow.appendChild(skipBtn);
   chatScroll().appendChild(retryRow);
   scrollBottom(chatScroll());
 }

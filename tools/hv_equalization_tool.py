@@ -501,7 +501,7 @@ class ExponentialHVPredictor:
     
     def predict_hv_adjustment(self, channel: str, current_hv: float,
                             current_adc: float, target_adc: float,
-                            tolerance: float = 0.01) -> Dict[str, Any]:
+                            tolerance: float = 0.03) -> Dict[str, Any]:
         """단일 채널 HV 조정 예측. tolerance: ADC 허용 오차 비율 (기본 1%)"""
 
         # Done 상태면 skip — 단, 현재 ADC가 tolerance를 벗어났으면 재활성화

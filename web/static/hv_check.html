@@ -143,6 +143,19 @@
     </table>
   </div>
   <pre id="raw" style="display:none"></pre>
+
+  <!-- Hodoscope HV card -->
+  <div id="hodo-card" style="
+    margin-top: 14px; padding: 12px 14px;
+    background: #1a1d27; border: 1px solid #2c2f3e; border-radius: 6px;
+    font-size: 12px; max-width: 320px;
+  ">
+    <div style="font-weight:600; color:#4f8ef7; margin-bottom:8px; font-size:11px;
+                text-transform:uppercase; letter-spacing:0.5px;">
+      Hodoscope HV (set file)
+    </div>
+    <div id="hodo-val" style="color:#9ca0b8;">로딩 중...</div>
+  </div>
 </div>
 
 <script>
@@ -394,10 +407,33 @@ expertBtn.addEventListener('click', () => {
   loadStatus();
 });
 
+/* ── Hodoscope HV card ── */
+const hodoValEl = document.getElementById('hodo-val');
+
+async function loadHodoscopeHV() {
+  try {
+    const res  = await fetch('/api/hv/hodoscope?t=' + Date.now());
+    const data = await res.json();
+    if (!res.ok || data.ok === false) throw new Error(data.error || `HTTP ${res.status}`);
+    const hv = parseFloat(data.hv);
+    if (hv === 0.0) {
+      hodoValEl.innerHTML = '<span style="color:#ef5350">Off (0.0 V)</span>';
+    } else {
+      hodoValEl.innerHTML = `<span style="color:#81c784">${hv} V</span>`;
+    }
+  } catch (e) {
+    hodoValEl.innerHTML = `<span style="color:#ef5350">읽기 실패: ${e.message}</span>`;
+  }
+}
+
 /* ── Init ── */
 setExpertColumnsVisible(false);
 loadStatus();
+loadHodoscopeHV();
 applyAutoInterval(autoMs);
+
+/* Refresh hodoscope HV at the same auto interval */
+setInterval(loadHodoscopeHV, autoMs);
 </script>
 </body>
 </html>

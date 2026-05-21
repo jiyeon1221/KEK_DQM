@@ -362,6 +362,19 @@ async def api_hv_status_all(expert: bool = False):
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
 
+@app.get("/api/hv/hodoscope")
+async def api_hv_hodoscope():
+    """Return current hodoscope HV setting read from the DAQ set file."""
+    try:
+        from tools.hodoscope_hv_tool import read_hv_from_setfile
+        hv = read_hv_from_setfile()
+        if hv is None:
+            return JSONResponse({"ok": False, "error": "Set file을 읽을 수 없습니다."}, status_code=500)
+        return {"ok": True, "hv": hv}
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+
 @app.get("/api/hv/expert-metrics")
 async def api_hv_expert_metrics():
     """Return only expert metrics (RampUp/RampDown/Max) for all channels.
@@ -1077,7 +1090,7 @@ async def websocket_endpoint(ws: WebSocket):
                     #   → "완료"/"종료"/"exit"  → scenario (queue for next get_input)
                     #   → anything else         → Brain ad-hoc
                     if runner.waiting_flag.is_set():
-                        if content == "retry" and _retry_cm[0]:
+                        if content in ("retry", "skip") and _retry_cm[0]:
                             _cm[0] = False
                             _retry_cm[0] = False
                             runner.send_input(content)

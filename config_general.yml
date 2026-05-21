@@ -1,3 +1,13 @@
+# ===== Motor (EZSmotor / azd_kren) =====
+Motor:
+  IP: "192.168.1.1"
+  Port: 502
+  Speed: 20.0
+  Acc: 100000
+  Dec: 100000
+  EZSBinary: /Users/yhep/autoTB/EZSmotor/azd_kren
+  UnitScale: 1.0       # scan 좌표 → motor mm 변환 계수 (1.0 = 그대로)
+
 # BaseDirectory: "/Volumes/yhep/scratch/YUdaq"
 BaseDirectory: "/Users/yhep/autoTB/toydataset"
 # Mapping: "/Users/yhep/autoTB/DQM/mapping/toymapping.root"
@@ -16,6 +26,9 @@ Paths:
   KillMeFile: "/Volumes/yhep/scratch/notice/test/TB_daq/KILLME"
 
   DqmDir: "/Users/yhep/autoTB/DQM"
+
+  HodoscopeSetFile: "/Volumes/yhep/scratch/notice/test/TB_daq/config/setup/set_JBNU_DAQ_21.txt"
+  DaqLogDir: "/Volumes/yhep/scratch/notice/test/TB_daq/log"
 
 # ===== Mac Studio SSH =====
 StudioSSH:

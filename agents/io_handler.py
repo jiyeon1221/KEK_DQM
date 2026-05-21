@@ -165,7 +165,7 @@ class WebSocketIO(IOHandler):
             "attempts": attempts,
         })
 
-    def wait_for_retry(self):
+    def wait_for_retry(self) -> str:
         from agents.agent_runner import StopAgentException
         self.output_queue.put({"type": "awaiting_retry"})
         if self.waiting_flag is not None:
@@ -175,8 +175,8 @@ class WebSocketIO(IOHandler):
                 if self.stop_event and self.stop_event.is_set():
                     raise StopAgentException()
                 try:
-                    self.input_queue.get(timeout=0.2)
-                    return
+                    val = self.input_queue.get(timeout=0.2)
+                    return val
                 except queue.Empty:
                     continue
         finally:

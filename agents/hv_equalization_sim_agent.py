@@ -173,6 +173,7 @@ class HVEqualizationSimAgent(HVEqualizationAgent):
             except Exception as e:
                 self.log(f"fitting summary 실패: {e}")
 
+            self.state["needs_suggest"] = False  # suggest 완료
             return json.dumps(result_dict, ensure_ascii=False, indent=2)
 
         return super()._execute_tool(tool_name, params)

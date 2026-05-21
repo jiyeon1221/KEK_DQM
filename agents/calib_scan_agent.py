@@ -8,7 +8,7 @@ from pathlib import Path
 from datetime import datetime
 
 from tools.daq_tool import DAQRunTool
-
+import tools.motor_control_tool as motor
 
 from .base_agent import BaseAgent
 sys.path.append(str(Path(__file__).parent.parent))
@@ -73,7 +73,9 @@ class CalibScanAgent(BaseAgent):
                     "collected_events": 0,
                     "runs": [],
                     "completed": False,
-                    "completed_at": None
+                    "completed_at": None,
+                    "x_moved": False,
+                    "y_confirmed": False,
                 }
                 for tower in self.tower_order
             },
@@ -102,9 +104,12 @@ Follow these steps EXACTLY:
 === STEP 1: For Each Tower in tower_order (REPEAT for T1-T9) ===
 Repeat steps 1a-1c for each tower in tower_order until all towers are completed.
 
-1a. Request Tower Movement
-Output: {"message": "{tower} 타워 중심으로 이동해주세요 (x:{x}, y:{y}).", "update_state": {"current_tower": "{tower}"}}
-(Note: replace {tower}, {x}, {y} with values from state)
+1a-i. Move X-axis automatically (no user input needed):
+  Output: {"tool": "motor_x_move_tool", "params": {"x": <x from state>}}
+
+1a-ii. After motor tool completes, ask user to move Y-axis manually:
+  Output: {"message": "X축 자동 이동 완료 (<x> mm). Y축을 <y>으로 이동해주세요.", "update_state": {"current_tower": "<tower>"}}
+  (Replace <x>, <y>, <tower> with values from state)
 
 After user says "완료":
 CRITICAL: When you see "완료" in conversation history, proceed to next step immediately.
@@ -135,21 +140,30 @@ When ALL towers are completed, output:
 
 === CRITICAL RULES ===
 1. Follow steps STRICTLY in order. Do NOT skip or reorder steps.
-2. Use EXACT messages above. DO NOT change or paraphrase.
-3. Output JSON format (CHOOSE ONE, NEVER BOTH):
+2. Step 1a-i ALWAYS comes before 1a-ii for every tower.
+3. Output JSON format (CHOOSE ONE):
    - {"tool": "...", "params": {...}, "update_state": {...}}
    - {"message": "...", "update_state": {...}}
    - {"tool": "none", "update_state": {...}}
-4. MOST IMPORTANT: When you see "완료" in conversation history, you MUST process it IMMEDIATELY.
+4. When you see "완료" in conversation history, process it IMMEDIATELY.
 """
 
     def _get_step_hint(self) -> str:
         """현재 상태 요약 - AI가 학습을 통해 다음 단계를 스스로 결정"""
         phase = self.state.get("phase", "config")
         tower_idx = self.state.get("current_tower_idx", 0)
-        current_tower = self.tower_order[tower_idx] if tower_idx < len(self.tower_order) else "All completed"
         total = len(self.tower_order)
-        return f"Phase: {phase} | Tower: {current_tower} ({tower_idx + 1}/{total})"
+        if tower_idx < total:
+            tower = self.tower_order[tower_idx]
+            status = self.state["tower_status"].get(tower, {})
+            if not status.get("x_moved"):
+                return f"Phase: {phase} | Tower: {tower} ({tower_idx+1}/{total}) | NEXT: motor_x_move_tool (step 1a-i)"
+            elif not status.get("y_confirmed"):
+                return f"Phase: {phase} | Tower: {tower} ({tower_idx+1}/{total}) | NEXT: Y-axis move message (step 1a-ii)"
+            elif not status.get("runs"):
+                return f"Phase: {phase} | Tower: {tower} ({tower_idx+1}/{total}) | NEXT: daq_run_tool (step 1b)"
+            return f"Phase: {phase} | Tower: {tower} ({tower_idx+1}/{total})"
+        return f"Phase: {phase} | All towers completed"
 
     # Fields that can never be overwritten by the LLM under any circumstances.
     _ALWAYS_PROTECTED = frozenset({
@@ -196,7 +210,21 @@ When ALL towers are completed, output:
         """Tool 실행"""
         if tool_name == "none":
             return "no_tool_executed"
-        
+
+        elif tool_name == "motor_x_move_tool":
+            x = float(params.get("x", 0))
+            self.io.send_tool_output(f"[Motor] X축 이동 시작: {x:.3f} mm")
+            def _do_move():
+                ok, msg = motor.move_x(x)
+                if not ok:
+                    raise RuntimeError(msg)
+                return msg
+            result = self._run_tool_with_retry(_do_move, "motor_x_move_tool")
+            self.io.send_tool_output(f"[Motor] {result}")
+            tower = self.tower_order[self.state["current_tower_idx"]]
+            self.state["tower_status"][tower]["x_moved"] = True
+            return result
+
         elif tool_name == "daq_run_tool":
             # Override events with configured target (don't trust LLM's value)
             if self.state.get('target_events') is not None:
@@ -309,6 +337,12 @@ When ALL towers are completed, output:
                         break
                     user_input = self.io.get_input()
                     if user_input in ["종료", "exit"]: break
+                    if "이동해주세요" in message and user_input.strip() == "완료":
+                        tower_idx = self.state["current_tower_idx"]
+                        if tower_idx < len(self.tower_order):
+                            tower = self.tower_order[tower_idx]
+                            self.state["tower_status"][tower]["y_confirmed"] = True
+                            self.log(f"Y-axis confirmed for {tower}")
                     self.add_to_history("user", user_input)
                     continue
 
@@ -391,7 +425,9 @@ When ALL towers are completed, output:
             if status['completed']:
                 lines.append(f"  ✅ {tower} (x:{pos['x']:.1f}, y:{pos['y']:.1f}): Completed (Runs: {status['runs']})")
             elif i == self.state['current_tower_idx']:
-                lines.append(f"  ➡️  {tower} (x:{pos['x']:.1f}, y:{pos['y']:.1f}): Pending  <- CURRENT (target: {self.state['target_events']} events)")
+                x_tag = " [X moved]" if status.get("x_moved") else ""
+                y_tag = " [Y confirmed - proceed to DAQ]" if status.get("y_confirmed") else ""
+                lines.append(f"  ➡️  {tower} (x:{pos['x']:.1f}, y:{pos['y']:.1f}): Pending{x_tag}{y_tag}  <- CURRENT (target: {self.state['target_events']} events)")
             else:
                 lines.append(f"     {tower} (x:{pos['x']:.1f}, y:{pos['y']:.1f}): Pending")
         return "\n".join(lines)

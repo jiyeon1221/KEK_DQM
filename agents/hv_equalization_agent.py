@@ -14,6 +14,7 @@ from datetime import datetime
 
 from tools.daq_tool import DAQRunTool
 from tools.hv_control_tool import HVControlTool
+import tools.motor_control_tool as motor
 from tools.position_calculator_tool import calculate_position
 from tools.hv_equalization_tool import (
     hv_equalization_suggest,
@@ -85,6 +86,9 @@ class HVEqualizationAgent(BaseAgent):
             "last_run_number": None,
             "iterations": 0,
             "done": False,
+            "x_moved": False,
+            "y_confirmed": False,
+            "needs_suggest": False,
         }
         self.log(f"Agent 초기화: {tower}, E={beam_energy}GeV, Events={target_events}, Target ADC={target_adc}")
 
@@ -98,8 +102,11 @@ Your task: adjust HV for {t}C and {t}S channels to reach the target peakADC valu
 Follow these steps EXACTLY:
 
 === Workflow for {t} ===
-1a. Request move:
-  {{"message": "{t} 타워 중심으로 이동해주세요 (x:{x:.1f}, y:{y:.1f})."}}
+1a-i. Move X-axis automatically (no user input needed):
+  {{"tool": "motor_x_move_tool", "params": {{"x": {x:.1f}}}}}
+
+1a-ii. After motor completes, request Y-axis from user:
+  {{"message": "X축 자동 이동 완료 ({x:.1f} mm). Y축을 {y:.1f}으로 이동해주세요."}}
 
 After user says "완료":
 1b. Check HV status:
@@ -136,10 +143,11 @@ After user says "완료":
 
 === CRITICAL RULES ===
 1. Follow steps STRICTLY in order. Do NOT skip Step 1e (Approval).
-2. Output JSON ONLY. No natural language.
-3. NEVER include a done channel in channel_values.
-4. ALWAYS use EXACT numbers from state — never invent values.
-5. When CONVERGED (state C=True, S=True), call hv_equalization_done_channel IMMEDIATELY.
+2. Step 1a-i ALWAYS comes before 1a-ii.
+3. Output JSON ONLY. No natural language.
+4. NEVER include a done channel in channel_values.
+5. ALWAYS use EXACT numbers from state — never invent values.
+6. When CONVERGED (state C=True, S=True), call hv_equalization_done_channel IMMEDIATELY.
 """
 
     def _get_step_hint(self) -> str:
@@ -152,13 +160,20 @@ After user says "완료":
         base = f"Phase: {phase} | Tower: {tower}"
 
         if self.state.get("last_hv_c") is None:
-            return f"{base} | REQUIRED NEXT: move request (step 1a)"
+            if not self.state.get("x_moved"):
+                return f"{base} | REQUIRED NEXT: motor_x_move_tool (step 1a-i)"
+            elif not self.state.get("y_confirmed"):
+                return f"{base} | REQUIRED NEXT: Y-axis move message (step 1a-ii)"
+            else:
+                return f"{base} | REQUIRED NEXT: hv_execute_tool status (step 1b — Y-axis confirmed)"
         elif adc_known and done_c and done_s:
             return f"{base} | CONVERGED → call hv_equalization_done_channel (step 1h)"
         elif adc_known and suggest_pending and phase == "approving":
             return f"{base} | REQUIRED NEXT: hv_execute_tool voltage (step 1f — user already confirmed)"
         elif adc_known and suggest_pending:
             return f"{base} | REQUIRED NEXT: approval message (step 1e)"
+        elif self.state.get("needs_suggest"):
+            return f"{base} | REQUIRED NEXT: hv_equalization_suggest (step 1d — DAQ done, analyze now)"
         elif adc_known:
             return f"{base} | REQUIRED NEXT: daq_run_tool (step 1c)"
         else:
@@ -172,10 +187,19 @@ After user says "완료":
         phase = self.state.get("phase", "idle")
 
         if self.state.get("last_hv_c") is None:
-            lines.append(f"*** REQUIRED NEXT: move request (step 1a) — ask user to move to {tower} ***")
+            if not self.state.get("x_moved"):
+                lines.append(f"*** REQUIRED NEXT: motor_x_move_tool (step 1a-i) — auto-move X to {tower} ***")
+            elif not self.state.get("y_confirmed"):
+                lines.append(f"*** REQUIRED NEXT: Y-axis move message (step 1a-ii) — ask user to move Y to {tower} ***")
+            else:
+                lines.append(f"*** REQUIRED NEXT: hv_execute_tool status (step 1b) — Y-axis confirmed, check HV now ***")
             lines.append("")
 
-        if adc_known:
+        if self.state.get("needs_suggest"):
+            lines.append(f"*** REQUIRED NEXT: hv_equalization_suggest (step 1d) — DAQ run {self.state.get('last_run_number')} complete, analyze NOW ***")
+            lines.append(f"*** DO NOT call daq_run_tool again — call hv_equalization_suggest first ***")
+            lines.append("")
+        elif adc_known:
             done_c = self.state.get("channel_done_c", False)
             done_s = self.state.get("channel_done_s", False)
             adc_c = self.state["last_adc_c"]
@@ -207,7 +231,7 @@ After user says "완료":
             lines.append("")
 
         lines.append(f"Phase: {phase}")
-        lines.append(f"Tower: {tower} (x:{self.state['tower_pos']['x']:.1f}, y:{self.state['tower_pos']['y']:.1f})")
+        lines.append(f"Tower: {tower} (x:{self.state['tower_pos']['x']:.1f}, y:{self.state['tower_pos']['y']:.1f})  [X moved: {self.state.get('x_moved', False)}]")
         lines.append(f"Beam Energy: {self.state['beam_energy']} GeV")
         lines.append(f"Target Events: {self.state['target_events']}")
         lines.append(f"Target ADC: {self.state['target_adc_c']}")
@@ -266,6 +290,19 @@ After user says "완료":
             if tool_name == "none":
                 return "no_tool_executed"
 
+            elif tool_name == "motor_x_move_tool":
+                x = float(params.get("x", self.tower_pos["x"]))
+                self.io.send_tool_output(f"[Motor] X축 이동 시작: {x:.3f} mm")
+                def _do_move():
+                    ok, msg = motor.move_x(x)
+                    if not ok:
+                        raise RuntimeError(msg)
+                    return msg
+                result = self._run_tool_with_retry(_do_move, "motor_x_move_tool")
+                self.io.send_tool_output(f"[Motor] {result}")
+                self.state["x_moved"] = True
+                return result
+
             elif tool_name == "daq_run_tool":
                 if self.state.get("target_events") is not None:
                     params["events"] = self.state["target_events"]
@@ -287,6 +324,7 @@ After user says "완료":
                     self.state["last_run_number"] = run_number
                     self.state["iterations"] = self.state.get("iterations", 0) + 1
                     self.log(f"DAQ Run {run_number} 완료: {self.tower}, {params.get('events', 0)} events")
+                self.state["needs_suggest"] = True  # DAQ 후 반드시 suggest 호출
                 return result
 
             elif tool_name == "hv_execute_tool":
@@ -354,6 +392,7 @@ After user says "완료":
                         raise RuntimeError(r.get("message", "hv_equalization_suggest 실패"))
                     return res
                 result = self._run_tool_with_retry(_call_suggest, "hv_equalization_suggest")
+                self.state["needs_suggest"] = False  # suggest 완료
                 try:
                     r = json.loads(result) if isinstance(result, str) else result
                     cur = r.get("current", {})
@@ -527,6 +566,7 @@ After user says "완료":
         "last_hv_c", "last_hv_s",
         "last_run_number",
         "iterations", "done",
+        "needs_suggest",
     })
 
     def _update_state(self, updates: Dict[str, Any]):
@@ -611,6 +651,9 @@ After user says "완료":
                             if user_input in ["종료", "exit"]:
                                 return
 
+                    if "이동해주세요" in message and user_input.strip() == "완료":
+                        self.state["y_confirmed"] = True
+                        self.log("Y-axis confirmed")
                     self.add_to_history("user", user_input)
                     continue
 

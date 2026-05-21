@@ -28,10 +28,13 @@ TOOL_LOCK_MAP = {
     "run_log": None,
     "hv_read": "hv",
     "hv_write": "hv",
+    "motor_move": None,
+    "hodoscope_hv_read": None,
+    "hodoscope_hv_write": None,
 }
 
 # Tools that require user confirmation before execution.
-TOOLS_NEED_CONFIRM = {"hv_write"}
+TOOLS_NEED_CONFIRM = {"hv_write", "hodoscope_hv_write"}
 
 
 
@@ -55,6 +58,19 @@ Available tools:
   Voltage: {"command": "voltage", "channels": ["T1C", ...] | "all", "voltage": <V as float>}
   On/off:  {"command": "on"|"off", "channels": ["T1C", ...] | "all"}
   Channel names: T1C, T1S, T2C, T2S, ..., T9C, T9S
+- motor_move: Move X-axis motor.
+  Absolute (이동할 위치 지정): {"type": "absolute", "x": <mm>}  → azd_kren --moveto
+  Relative (현재 위치 기준 이동): {"type": "relative", "x": <mm>}  → azd_kren --move
+  Positive x = right(+), negative x = left(-).
+  Use "absolute" when user specifies a target position.
+  Use "relative" when user specifies a displacement.
+- hodoscope_hv_read: Read current hodoscope HV setting from the DAQ set file.
+  params: {"command": "read"}
+  Returns a single value (the 'hv' line in the set file that applies to all 4 hodoscope channels).
+- hodoscope_hv_write: Change hodoscope HV in the DAQ set file. User confirmation required.
+  Set voltage: {"command": "write", "value": <V as float>}
+  Turn off:    {"command": "write", "value": 0.0}
+  Channel names: N/A — set file has one 'hv' value shared by all 4 hodoscope channels.
 
 Current experiment state is provided so you can resolve relative references
 like "방금", "이번 런", "지금" to concrete run numbers or energies.
@@ -83,6 +99,14 @@ RULES:
 10. Specific tower/channel (T1, T1-C, T1-S, T5 etc.) → type: single, modules: [name].
 11. "heatmap" or "MCPPMT" mentioned → type: heatmap, modules: ["MCPPMT"]. Always MCPPMT (SiPM not used).
 12. No type/channel hint → type: full.
+13. motor_move — absolute vs relative:
+    - 절대위치/~으로 이동/~mm 위치로/위치 지정 → type: absolute
+    - 오른쪽/왼쪽/더/만큼/상대적/현재에서 → type: relative (right=+, left=-)
+14. hodoscope_hv_read: "호도스코프 HV 확인", "호도 HV 얼마야", "hodoscope HV 읽어줘" → hodoscope_hv_read.
+15. hodoscope_hv_write: "호도스코프 HV X로 설정", "호도 HV X볼트로 바꿔줘", "hodoscope HV 꺼줘" → hodoscope_hv_write.
+    - "꺼줘" / "off" / "0으로" → value: 0.0
+    - "호도스코프 HV"는 set file의 단일 'hv' 라인이며 4채널 공통 적용.
+    - hodoscope_hv_write is in TOOLS_NEED_CONFIRM — system will ask for confirmation.
 """
 
 
@@ -246,6 +270,12 @@ class BrainAgent(BaseAgent):
                 return f"HV 켜기\n  채널: {ch_str}"
             if cmd == "off":
                 return f"HV 끄기\n  채널: {ch_str}"
+        if tool_name == "hodoscope_hv_write":
+            cmd = params.get("command", "write")
+            v = params.get("value", "?")
+            if float(v) == 0.0:
+                return "Hodoscope HV 끄기\n  value: 0.0 V (off)"
+            return f"Hodoscope HV 변경\n  value: {v} V"
         return f"{tool_name}\n  params: {params}"
 
     # ── Validation ────────────────────────────────────────────────────────────
@@ -366,6 +396,30 @@ class BrainAgent(BaseAgent):
                     from tools.hv_control_tool import HVControlTool
                     io.send_status("HV 변경 중...")
                     result = HVControlTool().execute(params)
+                    io.send_tool_output(result)
+
+                elif tool_name == "motor_move":
+                    from tools.motor_control_tool import move_x, move_relative
+                    move_type = params.get("type", "absolute")
+                    x = float(params.get("x", 0))
+                    io.send_status(f"[Motor] {'절대' if move_type == 'absolute' else '상대'} 이동: {x:.3f} mm")
+                    if move_type == "relative":
+                        ok, msg = move_relative(x)
+                    else:
+                        ok, msg = move_x(x)
+                    if not ok:
+                        raise RuntimeError(msg)
+                    io.send_tool_output(f"[Motor] {msg}")
+
+                elif tool_name == "hodoscope_hv_read":
+                    from tools.hodoscope_hv_tool import HodoscopeHVTool
+                    result = HodoscopeHVTool().execute({"command": "read"})
+                    io.send_tool_output(result)
+
+                elif tool_name == "hodoscope_hv_write":
+                    from tools.hodoscope_hv_tool import HodoscopeHVTool
+                    io.send_status("Hodoscope HV 변경 중...")
+                    result = HodoscopeHVTool().execute(params)
                     io.send_tool_output(result)
 
                 else:

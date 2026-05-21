@@ -137,6 +137,11 @@ html, body { height: 100%; font-family: 'Segoe UI', system-ui, sans-serif; backg
 .inline-retry-btn:hover  { background: #c0392b; }
 .inline-retry-btn:active { transform: scale(0.97); }
 .inline-retry-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.inline-skip-btn {
+  background: #2980b9;
+  margin-left: 8px;
+}
+.inline-skip-btn:hover { background: #1f6391; }
 
 /* User message (echo) */
 .user-bubble {

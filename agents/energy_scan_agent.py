@@ -8,6 +8,7 @@ from pathlib import Path
 from datetime import datetime
 
 from tools.daq_tool import DAQRunTool
+import tools.motor_control_tool as motor
 
 from .base_agent import BaseAgent
 sys.path.append(str(Path(__file__).parent.parent))
@@ -75,6 +76,8 @@ class EnergyScanAgent(BaseAgent):
             "start_time": datetime.now().isoformat(),
             "plot_method": "PeakADC",
             "plot_max_event": None,
+            "x_moved": False,
+            "y_confirmed": False,
         }
         
         self.log(f"Energy Scan Agent 초기화: {list(self._init_energy_config.keys())} GeV")
@@ -98,17 +101,22 @@ After user responds, parse their input:
   CRITICAL: beam_energy in GeV → store as integer (e.g. "2GeV" → 2, NOT 2000)
   CRITICAL: If user says "모두", "각각", or "씩" with one number (e.g., "모두 500개"), apply that number to ALL energies.
 
-=== STEP 1: Request T5 Movement ===
-CRITICAL RULE: After STEP 0, when phase is "idle" and energy_config is NOT empty, you MUST output T5 movement message.
-DO NOT repeat STEP 0. DO NOT skip to phase "scanning". 
-You MUST output: {"message": "T5 타워 중심으로 이동해주세요 (x:{x}, y:{y})."}
-Note: replace {x}, {y} with the actual coordinates provided in the state.
+=== STEP 1: Move to T5 ===
+CRITICAL RULE: After STEP 0, when phase is "idle" and energy_config is NOT empty, start STEP 1.
+DO NOT repeat STEP 0. DO NOT skip to phase "scanning".
+
+1a-i. Move X-axis automatically (no user input needed):
+  Output: {"tool": "motor_x_move_tool", "params": {"x": <x from state>}}
+
+1a-ii. After motor tool completes, ask user to move Y-axis manually:
+  Output: {"message": "X축 자동 이동 완료 (<x> mm). Y축을 <y>으로 이동해주세요."}
+  (Replace <x>, <y> with T5 Position values from state)
 
 After user says "완료":
 CRITICAL: When you see "완료" in conversation history, you MUST NOT repeat the same message.
 You MUST proceed to next step immediately by outputting:
 {"tool": "none", "update_state": {"phase": "scanning"}}
-DO NOT output the same message again. DO NOT ask for T5 movement again.
+DO NOT output the same message again.
 
 Then go to STEP 2.
 
@@ -160,11 +168,11 @@ If user says "종료", the session ends.
 5. STEP TRANSITION RULES (MOST CRITICAL):
    - phase="config", no history → output STEP 0a (ask message). DO NOT skip to parse.
    - phase="config", user just answered → output STEP 0b (parse + update_state). DO NOT ask again.
-   - After STEP 0b (energy_config parsed, phase="idle"): You MUST go to STEP 1 (T5 movement message). DO NOT repeat STEP 0.
-   - After STEP 1 (T5 movement message sent): Wait for user "완료", then go to STEP 2.
+   - After STEP 0b (energy_config parsed, phase="idle"): You MUST go to STEP 1 (motor_x_move_tool). DO NOT repeat STEP 0.
+   - After STEP 1a-i (motor done): Send Y-axis message. After user "완료", go to STEP 2.
    - NEVER skip STEP 1. NEVER output STEP 0 decision twice in a row.
 6. MOST IMPORTANT: When you see "완료" in conversation history, you MUST process it IMMEDIATELY:
-   - T5 movement "완료" → Output {"tool": "none", "update_state": {"phase": "scanning"}} and proceed to STEP 2
+   - Y-axis "완료" → Output {"tool": "none", "update_state": {"phase": "scanning"}} and proceed to STEP 2
    - Energy setting "완료" → Execute DAQ immediately ({"tool": "daq_run_tool", ...})
    - Plot confirmation "완료" → Update energy status to "completed": true.
 7. AFTER COMPLETION: If all energies are done and you have sent the completion message, you are ready for a new task or exit.
@@ -178,37 +186,25 @@ If user says "종료", the session ends.
         lines.append(f"Phase: {self.state['phase']}")
         lines.append(f"Tower: {self.state['tower']}")
         lines.append(f"T5 Position: x={self.t5_x:.1f}, y={self.t5_y:.1f}, rot=1.5, tilt=1.0")
+        lines.append(f"x_moved: {self.state.get('x_moved', False)}")
+        lines.append(f"y_confirmed: {self.state.get('y_confirmed', False)}")
         if self.state['position']:
             lines.append(f"Position: {self.state['position']}")
         lines.append("")
-        lines.append(f"Scan Order: {self.state['scan_order']}")
-        lines.append(f"Current Energy: {self.state['current_energy']} GeV (index: {self.state['current_energy_idx']})")
-        lines.append("")
-        
-        lines.append("Energy Progress:")
-        for energy in self.state['scan_order']:
-            if energy is None:
-                continue
-            config = self.state['energy_config'][energy]
-            collected = config['collected_events']
-            target = config['target_events']
-            runs = config['runs']
-            completed = config['completed']
-            
-            if completed:
-                status = "✅"
-            elif collected > 0:
-                status = f"⏳ {collected}/{target}"
-            else:
-                status = "⏸️  Not started"
-            
-            run_info = f"Runs: {runs}" if runs else ""
-            
-            if energy == self.state['current_energy']:
-                lines.append(f"  {energy} GeV: {status} {run_info} ← CURRENT (target: {target} events)")
-            else:
-                lines.append(f"  {energy} GeV: {status} {run_info}")
-        
+
+        ec = self.state.get("energy_config", {})
+        so = self.state.get("scan_order", [])
+        if ec:
+            lines.append("Energy Config:")
+            for e in so:
+                cfg = ec.get(e, {})
+                status = "✅" if cfg.get("completed") else "➡️" if e == self.state.get("current_energy") else "  "
+                lines.append(
+                    f"  {status} {e} GeV: target={cfg.get('target_events', '?')} "
+                    f"collected={cfg.get('collected_events', 0)} "
+                    f"runs={cfg.get('runs', [])} completed={cfg.get('completed', False)}"
+                )
+
         return "\n".join(lines)
     
     def _get_step_hint(self) -> str:
@@ -218,6 +214,13 @@ If user says "종료", the session ends.
             if self.conversation_history:
                 return "Phase: config | REQUIRED NEXT: parse user input and update state (step 0b)"
             return "Phase: config | REQUIRED NEXT: ask for energy settings (step 0a)"
+        if phase == "idle":
+            if not self.state.get("x_moved"):
+                return f"Phase: idle | NEXT: motor_x_move_tool (step 1a-i, x={self.t5_x:.1f})"
+            elif not self.state.get("y_confirmed"):
+                return f"Phase: idle | NEXT: Y-axis move message (step 1a-ii, y={self.t5_y:.1f})"
+            else:
+                return f"Phase: idle | Y-axis CONFIRMED — NEXT: set phase=scanning (step 1a-ii complete)"
         current_energy = self.state.get("current_energy")
         scan_order = self.state.get("scan_order", [])
         idx = scan_order.index(current_energy) + 1 if current_energy in scan_order else 0
@@ -350,6 +353,9 @@ If user says "종료", the session ends.
                         break
                     user_input = self.io.get_input()
                     if user_input in ["종료", "exit"]: break
+                    if "이동해주세요" in message and user_input.strip() == "완료":
+                        self.state["y_confirmed"] = True
+                        self.log("Y-axis confirmed for T5")
                     self.add_to_history("user", user_input)
                     continue
 
@@ -386,7 +392,20 @@ If user says "종료", the session ends.
         
         if tool_name == "none":
             return "no_tool_executed"
-        
+
+        elif tool_name == "motor_x_move_tool":
+            x = float(params.get("x", self.t5_x))
+            self.io.send_tool_output(f"[Motor] X축 이동 시작: {x:.3f} mm")
+            def _do_move():
+                ok, msg = motor.move_x(x)
+                if not ok:
+                    raise RuntimeError(msg)
+                return msg
+            result = self._run_tool_with_retry(_do_move, "motor_x_move_tool")
+            self.io.send_tool_output(f"[Motor] {result}")
+            self.state["x_moved"] = True
+            return result
+
         elif tool_name == "daq_run_tool":
             # Determine the correct energy (don't blindly trust LLM's beam_energy)
             energy_key = params.get('beam_energy')

@@ -11,6 +11,7 @@ from pathlib import Path
 from .base_tool import BaseTool
 from .config_loader import get_path_config
 from .hv_control_tool import HVControlTool
+from .hodoscope_hv_tool import read_hv_from_log
 
 # ===== 경로 및 설정 (Config from YAML) =====
 RUNNUM_FILE = get_path_config("RunNumberFile")
@@ -191,6 +192,14 @@ class RunLogTool(BaseTool):
             hv_snapshot = self._collect_hv_vset_snapshot()
             hv_drc = hv_snapshot.get("hv_drc", "")
             hv_aux = hv_snapshot.get("hv_aux", "")
+
+        # Append hodoscope HV from the run log (actual per-channel values)
+        hodo_hvs = read_hv_from_log(str(run_num))
+        if hodo_hvs:
+            hodo_str = ", ".join(
+                f"Hodo[{ch}]:{hodo_hvs[ch]}" for ch in sorted(hodo_hvs)
+            )
+            hv_aux = f"{hv_aux}, {hodo_str}" if hv_aux else hodo_str
 
         # 실제 시트 컬럼 순서 (스크린샷 기준)
         # B(2): Program | C(3): Run # | D(4): evts | E(5): Time(start) | F(6): Time(end)

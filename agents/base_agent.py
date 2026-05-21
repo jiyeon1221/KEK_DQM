@@ -320,7 +320,9 @@ class BaseAgent(ABC):
                     if attempt < max_retries:
                         time.sleep(2)
             self.io.send_tool_error(tool_name, str(last_error), max_retries)
-            self.io.wait_for_retry()  # 사용자가 '다시 시도' 클릭할 때까지 블로킹
+            action = self.io.wait_for_retry()  # blocks until retry or skip
+            if action == "skip":
+                return f"[SKIPPED] {tool_name} 건너뜀 (사용자 요청)"
 
     # ===== 로깅 =====
     # stdout only — no file I/O

@@ -2,9 +2,6 @@
 """
 Training data generator for Energy Scan Agent
 
-autoTB 이전 버전과의 차이:
-  STEP 1 T5 이동 메시지 → motor_x_move_tool + Y축 메시지
-
 build_full_context / _build_state_context / _get_step_hint 포맷이
 EnergyScanAgent(energy_scan_agent.py)와 완전히 동일하도록 유지.
 """
@@ -18,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from config import MSG_PLOT_CONFIRM
 
 MESSAGE_ASK_ENERGY  = "에너지 설정을 입력해주세요.\n예) 1GeV 50000개 2GeV 200000개 5GeV 100000개  또는  1GeV 80000 3GeV 500000 5GeV 300000"
-MESSAGE_X_MOVED     = "X축 자동 이동 완료 ({x:.3f} mm). Y축을 {y:.3f}으로 이동해주세요."
+MESSAGE_MOVE_POS    = "x = {x:.3f} mm, y = {y:.3f} mm 으로 이동해주세요."
 MESSAGE_ENERGY_SET  = "빔 에너지를 {energy} GeV로 설정해주세요."
 MESSAGE_PLOT_CONFIRM = MSG_PLOT_CONFIRM
 MESSAGE_COMPLETE    = "모든 에너지 스캔이 완료되었습니다."
@@ -38,19 +35,16 @@ After user responds, parse their input:
   CRITICAL: beam_energy in GeV → store as number (integer if whole: "2GeV" → 2; float if decimal: "2.5GeV" → 2.5). NEVER convert to MeV.
   CRITICAL: If user says "모두", "각각", or "씩" with one number (e.g., "모두 500개"), apply that number to ALL energies.
 
-=== STEP 1: Move to T5 ===
+=== STEP 1: Move to M5T3 ===
 CRITICAL RULE: After STEP 0, when phase is "idle" and energy_config is NOT empty, start STEP 1.
 DO NOT repeat STEP 0. DO NOT skip to phase "scanning".
 
-1a-i. Move X-axis automatically (no user input needed):
-  Output: {"tool": "motor_x_move_tool", "params": {"x": <x from state>}}
+1a. Ask user to move to M5T3 position:
+  Output: {"message": "x = <x> mm, y = <y> mm 으로 이동해주세요."}
+  (Replace <x>, <y> with M5T3 Position values from state)
 
-1a-ii. After motor tool completes, ask user to move Y-axis manually:
-  Output: {"message": "X축 자동 이동 완료 (<x> mm). Y축을 <y>으로 이동해주세요."}
-  (Replace <x>, <y> with T5 Position values from state)
-
-After user says "완료" to the Y-axis message:
-The SYSTEM marks Y-axis confirmed and switches to scanning automatically — you do NOT output any state update.
+After user says "완료":
+The SYSTEM marks position confirmed and switches to scanning automatically — you do NOT output any state update.
 Just proceed to STEP 2 (the step hint will say "set-beam message").
 
 === STEP 2: For Each Energy in scan_order (REPEAT for ALL energies) ===
@@ -85,7 +79,7 @@ When ALL energies are completed, the SYSTEM sends the completion message and end
 === CRITICAL RULES ===
 1. Follow steps STRICTLY in order. Do NOT skip or reorder steps.
 2. Use EXACT messages above. DO NOT change or paraphrase.
-3. The SYSTEM (not you) owns all bookkeeping: x_moved, y_confirmed, phase→scanning, energy "completed", and session termination. NEVER output update_state for these — only the step hint tells you the next action.
+3. The SYSTEM (not you) owns all bookkeeping: y_confirmed, phase→scanning, energy "completed", and session termination. NEVER output update_state for these — only the step hint tells you the next action.
 4. Output JSON format (CHOOSE ONE, NEVER BOTH):
    - {"tool": "...", "params": {...}}  (for tool execution)
    - {"message": "..."}  (for user message)
@@ -95,8 +89,8 @@ When ALL energies are completed, the SYSTEM sends the completion message and end
 6. STEP TRANSITION RULES:
    - phase="config", no history → output STEP 0a (ask message). DO NOT skip to parse.
    - phase="config", user just answered → output STEP 0b (parse + update_state). DO NOT ask again.
-   - After STEP 0b (energy_config parsed, phase="idle"): go to STEP 1 (motor_x_move_tool). DO NOT repeat STEP 0.
-   - After STEP 1a-i (motor done): send Y-axis message. After user "완료", the system advances — go to STEP 2a.
+   - After STEP 0b (energy_config parsed, phase="idle"): go to STEP 1 (position move message). DO NOT repeat STEP 0.
+   - After STEP 1a (position message sent): wait for user "완료", the system advances — go to STEP 2a.
    - After DAQ tool runs: send STEP 2c plot message. DO NOT call daq_run_tool again for the same energy.
    - NEVER skip STEP 1. NEVER output the same message twice in a row.
 7. All "message" field values MUST be written in Korean (한국어) only. Never use Chinese characters (한자).
@@ -113,9 +107,8 @@ def _build_state_context(state):
     lines = []
     lines.append(f"Phase: {state['phase']}")
     lines.append(f"Tower: {state['tower']}")
-    lines.append(f"T5 Position: x={state['t5_x']:.3f}, y={state['t5_y']:.3f}, rot=1.5, tilt=1.0")
-    lines.append(f"x_moved: {state.get('x_moved', False)}")
-    lines.append(f"y_confirmed: {state.get('y_confirmed', False)}")
+    lines.append(f"M5T3 Position: x={state['t5_x']:.3f}, y={state['t5_y']:.3f}, rot=1.5, tilt=1.0")
+    lines.append(f"Position confirmed: {state.get('y_confirmed', False)}")
     lines.append(f"needs_plot_confirm: {state.get('needs_plot_confirm', False)}")
     if state.get("position"):
         lines.append(f"Position: {state['position']}")
@@ -153,9 +146,7 @@ def _get_step_hint(state, history):
             return "Phase: config | REQUIRED NEXT: parse user input and update state (step 0b)"
         return "Phase: config | REQUIRED NEXT: ask for energy settings (step 0a)"
     if phase == "idle":
-        if not state.get("x_moved"):
-            return f"Phase: idle | REQUIRED NEXT: motor_x_move_tool (step 1a-i, x={state.get('t5_x', 0):.3f})"
-        return f"Phase: idle | REQUIRED NEXT: Y-axis move message (step 1a-ii, y={state.get('t5_y', 0):.3f})"
+        return f"Phase: idle | REQUIRED NEXT: position move message (step 1a, x={state.get('t5_x', 0):.3f}, y={state.get('t5_y', 0):.3f})"
     current_energy = state.get("current_energy")
     scan_order = state.get("scan_order", [])
     idx = scan_order.index(current_energy) + 1 if current_energy in scan_order else 0
@@ -252,12 +243,11 @@ def generate_workflow_normal(energy_list, events_list, user_input):
     t5_x = round(random.uniform(70.0, 130.0), 3)
     t5_y = round(random.uniform(70.0, 130.0), 3)
     state = {
-        "phase": "config", "tower": "T5", "t5_x": t5_x, "t5_y": t5_y,
+        "phase": "config", "tower": "M5T3", "t5_x": t5_x, "t5_y": t5_y,
         "position": {"x": 0.2, "y": -0.3},
         "energy_config": {}, "scan_order": [],
         "current_energy": None, "current_energy_idx": 0,
         "plot_method": "PeakADC", "plot_max_event": None,
-        "x_moved": False,
         "y_confirmed": False,
         "needs_plot_confirm": False,
     }
@@ -278,18 +268,12 @@ def generate_workflow_normal(energy_list, events_list, user_input):
     history.append({"role": "assistant", "content": json.dumps(dec, ensure_ascii=False)})
     state.update(dec["update_state"])
 
-    # STEP 1a-i: motor_x_move_tool (x_moved=False)
-    dec = {"tool": "motor_x_move_tool", "params": {"x": t5_x}}
-    examples.append(make_example(state, history, dec))
-    history.append({"role": "assistant", "content": json.dumps(dec, ensure_ascii=False)})
-    state["x_moved"] = True
-
-    # STEP 1a-ii: Y축 메시지 (x_moved=True)
-    dec = {"message": MESSAGE_X_MOVED.format(x=t5_x, y=t5_y)}
+    # STEP 1a: 위치 이동 메시지
+    dec = {"message": MESSAGE_MOVE_POS.format(x=t5_x, y=t5_y)}
     examples.append(make_example(state, history, dec))
     history.append({"role": "assistant", "content": json.dumps(dec, ensure_ascii=False)})
     history.append({"role": "user",      "content": "완료"})
-    # 시스템이 Y 확인 + phase=scanning 처리 (모델 턴 없음)
+    # 시스템이 위치 확인 + phase=scanning 처리 (모델 턴 없음)
     state["y_confirmed"] = True
     state["phase"] = "scanning"
 
@@ -305,7 +289,7 @@ def generate_workflow_normal(energy_list, events_list, user_input):
 
 
 def generate_workflow_from_mid(energy_list, events_list, start_idx):
-    """후반 에너지부터 시작하는 partial 워크플로우 (phase=scanning, motor 이미 완료)."""
+    """후반 에너지부터 시작하는 partial 워크플로우 (phase=scanning, 위치 이동 이미 완료)."""
     examples = []
     t5_x = round(random.uniform(70.0, 130.0), 3)
     t5_y = round(random.uniform(70.0, 130.0), 3)
@@ -322,15 +306,14 @@ def generate_workflow_from_mid(energy_list, events_list, start_idx):
     }
 
     state = {
-        "phase": "scanning", "tower": "T5", "t5_x": t5_x, "t5_y": t5_y,
+        "phase": "scanning", "tower": "M5T3", "t5_x": t5_x, "t5_y": t5_y,
         "position": None,
         "energy_config": energy_config_dict,
         "scan_order": energy_list,
         "current_energy": energy_list[start_idx] if start_idx < len(energy_list) else None,
         "current_energy_idx": start_idx,
         "plot_method": "PeakADC", "plot_max_event": None,
-        "x_moved": True,  # 이미 motor 완료된 상태
-        "y_confirmed": True,  # 이미 Y축 이동 완료된 상태
+        "y_confirmed": True,  # 이미 위치 이동 완료된 상태
         "needs_plot_confirm": False,
     }
 

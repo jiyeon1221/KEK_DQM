@@ -41,22 +41,26 @@ def run_agent_thread(
 
         if agent_name == "em_scan":
             from sim.energy_scan_agent import EnergyScanSimAgent
+            _em_kwargs = {}
+            if params.get("tower"):
+                _em_kwargs["tower"] = params["tower"]
             agent = EnergyScanSimAgent(
                 energy_config={},
                 use_base_model=params.get("use_base_model", False),
                 io_handler=io,
+                **_em_kwargs,
             )
 
         elif agent_name == "calib_scan":
             from sim.calib_scan_agent import CalibScanSimAgent
             agent = CalibScanSimAgent(
-                tower_order=TOWER_ORDER,
+                tower_order=params.get("tower_order") or TOWER_ORDER,
                 use_base_model=params.get("use_base_model", False),
                 io_handler=io,
             )
 
         elif agent_name in ("hv_equalization", "hv_equalization_sim"):
-            _HV_TOWER_ORDER = TOWER_ORDER  # T1-T9 전체 순회 (MCP 아님)
+            _HV_TOWER_ORDER = params.get("tower_order") or TOWER_ORDER
 
             def _ask_float(prompt):
                 while True:
@@ -128,6 +132,114 @@ def run_agent_thread(
             if not stop_event.is_set():
                 io.send_ai_message("모든 타워 HV Equalization이 완료되었습니다. [SIM]")
                 io.send_status("✅ [SIM] fixed_hv.txt 업데이트 건너뜀 (sim mode)")
+            io.send_status("모델 언로드 중...")
+            clear_shared_state()
+            output_queue.put({"type": "agent_done"})
+            return
+
+        elif agent_name in ("position_scan", "position_scan_sim"):
+            center_tower = params.get("tower") or (params.get("tower_order") or TOWER_ORDER)[0]
+
+            def _ask_float(prompt):
+                while True:
+                    io.send_ai_message(prompt)
+                    val = io.get_input()
+                    if val in ("종료", "exit"):
+                        return None
+                    try:
+                        return float(val.strip())
+                    except ValueError:
+                        io.send_ai_message("⚠️ 숫자를 입력해주세요.")
+
+            def _ask_int(prompt):
+                v = _ask_float(prompt)
+                return int(v) if v is not None else None
+
+            def _ask_choice(prompt, options):
+                opts_lower = {o.lower(): o for o in options}
+                while True:
+                    io.send_ai_message(prompt)
+                    val = io.get_input()
+                    if val in ("종료", "exit"):
+                        return None
+                    key = val.strip().lower()
+                    if key in opts_lower:
+                        return opts_lower[key]
+                    io.send_ai_message(f"⚠️ {' / '.join(options)} 중 하나를 입력해주세요.")
+
+            # 방향/채널은 프론트 버튼(params)에서 옴. 없으면 채팅으로 질문(하위호환).
+            direction = (params.get("direction") or "").lower()
+            if direction not in ("horizontal", "vertical", "both"):
+                direction = _ask_choice(
+                    "스캔 방향을 선택해주세요. (horizontal / vertical / both)",
+                    ["horizontal", "vertical", "both"])
+                if direction is None:
+                    output_queue.put({"type": "agent_done"}); return
+            channel = (params.get("channel") or "").upper()
+            if channel not in ("C", "S"):
+                channel = _ask_choice("어떤 peakADC를 볼까요? (C / S)", ["C", "S"])
+                if channel is None:
+                    output_queue.put({"type": "agent_done"}); return
+
+            # 나머지 수치 입력은 한 번만 받아 두 방향(both)에서 공유한다.
+            beam_energy = _ask_float("빔 에너지 (GeV)를 입력해주세요.")
+            if beam_energy is None:
+                output_queue.put({"type": "agent_done"}); return
+            target_events = _ask_int("이벤트 수를 입력해주세요.")
+            if target_events is None:
+                output_queue.put({"type": "agent_done"}); return
+            est_x = _ask_float("estimated center X 좌표 (mm)를 입력해주세요.")
+            if est_x is None:
+                output_queue.put({"type": "agent_done"}); return
+            est_y = _ask_float("estimated center Y 좌표 (mm)를 입력해주세요.")
+            if est_y is None:
+                output_queue.put({"type": "agent_done"}); return
+            interval = _ask_float("이동 간격 (mm)을 입력해주세요.")
+            if interval is None:
+                output_queue.put({"type": "agent_done"}); return
+
+            update_shared_state({"current_tower": center_tower, "current_energy": beam_energy})
+
+            from sim.position_scan_agent import PositionScanSimAgent as _PSAgent
+
+            # both → horizontal 먼저 완료·언로드 후 vertical 재로드 (초기 입력은 재질문 안 함).
+            directions = ["horizontal", "vertical"] if direction == "both" else [direction]
+            for _di, _dir in enumerate(directions):
+                if stop_event.is_set():
+                    break
+                if len(directions) > 1:
+                    io.send_ai_message(
+                        f"[SIM] [{_di + 1}/{len(directions)}] {_dir} 방향 스캔을 시작합니다. 모델을 로드합니다...")
+                update_shared_state({"agent_type": agent_name, "current_tower": center_tower})
+                agent = _PSAgent(
+                    center_tower=center_tower,
+                    direction=_dir,
+                    channel=channel,
+                    beam_energy=beam_energy,
+                    target_events=target_events,
+                    est_center={"x": est_x, "y": est_y},
+                    interval=interval,
+                    use_base_model=params.get("use_base_model", False),
+                    io_handler=io,
+                )
+                set_shared_state_ref(agent.state)
+                _ps_sync_stop = threading.Event()
+                def _ps_sync(evt=_ps_sync_stop):
+                    while not evt.is_set():
+                        sync_shared_state()
+                        evt.wait(1.0)
+                _ps_sync_t = threading.Thread(target=_ps_sync, daemon=True)
+                _ps_sync_t.start()
+                with agent:
+                    agent.run()
+                _ps_sync_stop.set()
+                if len(directions) > 1 and _di < len(directions) - 1 and not stop_event.is_set():
+                    io.send_ai_message(
+                        f"✅ [SIM] {_dir} 방향 완료. 모델을 언로드하고 다음 방향을 이어서 진행합니다.")
+                    io.send_status("모델 언로드 중...")
+
+            if not stop_event.is_set():
+                io.send_ai_message("✅ 모든 Position Scan이 완료되었습니다. [SIM]")
             io.send_status("모델 언로드 중...")
             clear_shared_state()
             output_queue.put({"type": "agent_done"})

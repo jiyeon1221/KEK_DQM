@@ -42,3 +42,6 @@ models/*/**
 
 # position scan 결과 — 사용 안 함
 position_scan_results/
+
+# train 폴더 전체 제외
+train/

@@ -20,7 +20,6 @@ class ToolSimulator:
     def __init__(self):
         self._lock = threading.Lock()
         self._run_counter = 99_000
-        self._motor_x = 0.0
         # 채널명(예: T5C/T5S) → V0Set. 미설정 채널은 hv_status에서 775.0 기본값.
         self._hv: Dict[str, float] = {}
         self._hodoscope_hv = 1200.0
@@ -61,17 +60,6 @@ class ToolSimulator:
                 line_callback(line)
         return "\n".join(lines)
 
-    def motor_move(self, x: float, label: str = "") -> str:
-        self._motor_x = float(x)
-        tag = f" ({label})" if label else ""
-        return f"[SIM] Motor X moved to {x:.3f} mm{tag}"
-
-    def motor_status(self) -> str:
-        return f"[SIM] Current motor position: {self._motor_x:.3f} mm"
-
-    def motor_alarm_reset(self) -> str:
-        return "[SIM] Motor alarm reset OK"
-
     def daq_run(
         self,
         params: Dict[str, Any],
@@ -99,11 +87,15 @@ class ToolSimulator:
         )
 
     def hv_status(self, channels=None) -> str:
-        ch_list = channels if isinstance(channels, list) and channels else []
         lines = ["📊 [SIM] HV Status Query"]
-        for ch in ch_list:
-            v = self._hv.get(ch, 775.0)
-            lines.append(f"({ch})  V0Set = {v:.1f} V  [SIM]")
+        if isinstance(channels, list) and channels:
+            for ch in channels:
+                v = self._hv.get(ch, 775.0)
+                lines.append(f"({ch})  V0Set = {v:.1f} V  [SIM]")
+        elif isinstance(channels, str) and channels and channels.lower() not in ("all", "전체"):
+            lines.append(f"  channels = {channels}  [SIM]")
+        else:
+            lines.append("  channels = all  [SIM]")
         return "\n".join(lines)
 
     def hv_voltage(self, channel_values: Dict[str, float]) -> str:

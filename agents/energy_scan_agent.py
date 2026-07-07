@@ -8,7 +8,6 @@ from pathlib import Path
 from datetime import datetime
 
 from tools.daq_tool import DAQRunTool
-import tools.motor_control_tool as motor
 
 from .base_agent import BaseAgent
 sys.path.append(str(Path(__file__).parent.parent))
@@ -19,7 +18,7 @@ class EnergyScanAgent(BaseAgent):
     def __init__(
         self,
         energy_config: Dict[float, int],
-        tower: str = "T5",
+        tower: str = "M5T3",
         position: Optional[Dict[str, float]] = None,
         daq_config: str = "setup",
         use_base_model: bool = True,  # Fine-tuning 전에는 base model 사용
@@ -48,7 +47,7 @@ class EnergyScanAgent(BaseAgent):
         self.daq_tool = DAQRunTool()
         
         from tools.position_calculator_tool import get_calculator
-        t5_pos = get_calculator().calculate_tower_position("T5", rotation=1.5, tilting=1.0)
+        t5_pos = get_calculator().calculate_tower_position("M5T3", rotation=1.5, tilting=1.0)
         self.t5_x = t5_pos['x']
         self.t5_y = t5_pos['y']
         
@@ -78,7 +77,6 @@ class EnergyScanAgent(BaseAgent):
             "start_time": datetime.now().isoformat(),
             "plot_method": "PeakADC",
             "plot_max_event": None,
-            "x_moved": False,
             "y_confirmed": False,
             "needs_plot_confirm": False,
         }
@@ -104,19 +102,16 @@ After user responds, parse their input:
   CRITICAL: beam_energy in GeV → store as number (integer if whole: "2GeV" → 2; float if decimal: "2.5GeV" → 2.5). NEVER convert to MeV.
   CRITICAL: If user says "모두", "각각", or "씩" with one number (e.g., "모두 500개"), apply that number to ALL energies.
 
-=== STEP 1: Move to T5 ===
+=== STEP 1: Move to M5T3 ===
 CRITICAL RULE: After STEP 0, when phase is "idle" and energy_config is NOT empty, start STEP 1.
 DO NOT repeat STEP 0. DO NOT skip to phase "scanning".
 
-1a-i. Move X-axis automatically (no user input needed):
-  Output: {"tool": "motor_x_move_tool", "params": {"x": <x from state>}}
+1a. Ask user to move to M5T3 position:
+  Output: {"message": "x = <x> mm, y = <y> mm 으로 이동해주세요."}
+  (Replace <x>, <y> with M5T3 Position values from state)
 
-1a-ii. After motor tool completes, ask user to move Y-axis manually:
-  Output: {"message": "X축 자동 이동 완료 (<x> mm). Y축을 <y>으로 이동해주세요."}
-  (Replace <x>, <y> with T5 Position values from state)
-
-After user says "완료" to the Y-axis message:
-The SYSTEM marks Y-axis confirmed and switches to scanning automatically — you do NOT output any state update.
+After user says "완료":
+The SYSTEM marks position confirmed and switches to scanning automatically — you do NOT output any state update.
 Just proceed to STEP 2 (the step hint will say "set-beam message").
 
 === STEP 2: For Each Energy in scan_order (REPEAT for ALL energies) ===
@@ -151,7 +146,7 @@ When ALL energies are completed, the SYSTEM sends the completion message and end
 === CRITICAL RULES ===
 1. Follow steps STRICTLY in order. Do NOT skip or reorder steps.
 2. Use EXACT messages above. DO NOT change or paraphrase.
-3. The SYSTEM (not you) owns all bookkeeping: x_moved, y_confirmed, phase→scanning, energy "completed", and session termination. NEVER output update_state for these — only the step hint tells you the next action.
+3. The SYSTEM (not you) owns all bookkeeping: y_confirmed, phase→scanning, energy "completed", and session termination. NEVER output update_state for these — only the step hint tells you the next action.
 4. Output JSON format (CHOOSE ONE, NEVER BOTH):
    - {"tool": "...", "params": {...}}  (for tool execution)
    - {"message": "..."}  (for user message)
@@ -161,8 +156,8 @@ When ALL energies are completed, the SYSTEM sends the completion message and end
 6. STEP TRANSITION RULES:
    - phase="config", no history → output STEP 0a (ask message). DO NOT skip to parse.
    - phase="config", user just answered → output STEP 0b (parse + update_state). DO NOT ask again.
-   - After STEP 0b (energy_config parsed, phase="idle"): go to STEP 1 (motor_x_move_tool). DO NOT repeat STEP 0.
-   - After STEP 1a-i (motor done): send Y-axis message. After user "완료", the system advances — go to STEP 2a.
+   - After STEP 0b (energy_config parsed, phase="idle"): go to STEP 1 (position move message). DO NOT repeat STEP 0.
+   - After STEP 1a (position message sent): wait for user "완료", the system advances — go to STEP 2a.
    - After DAQ tool runs: send STEP 2c plot message. DO NOT call daq_run_tool again for the same energy.
    - NEVER skip STEP 1. NEVER output the same message twice in a row.
 7. All "message" field values MUST be written in Korean (한국어) only. Never use Chinese characters (한자).
@@ -175,9 +170,8 @@ When ALL energies are completed, the SYSTEM sends the completion message and end
         lines = []
         lines.append(f"Phase: {self.state['phase']}")
         lines.append(f"Tower: {self.state['tower']}")
-        lines.append(f"T5 Position: x={self.t5_x:.3f}, y={self.t5_y:.3f}, rot=1.5, tilt=1.0")
-        lines.append(f"x_moved: {self.state.get('x_moved', False)}")
-        lines.append(f"y_confirmed: {self.state.get('y_confirmed', False)}")
+        lines.append(f"M5T3 Position: x={self.t5_x:.3f}, y={self.t5_y:.3f}, rot=1.5, tilt=1.0")
+        lines.append(f"Position confirmed: {self.state.get('y_confirmed', False)}")
         lines.append(f"needs_plot_confirm: {self.state.get('needs_plot_confirm', False)}")
         if self.state['position']:
             lines.append(f"Position: {self.state['position']}")
@@ -206,10 +200,7 @@ When ALL energies are completed, the SYSTEM sends the completion message and end
                 return "Phase: config | REQUIRED NEXT: parse user input and update state (step 0b)"
             return "Phase: config | REQUIRED NEXT: ask for energy settings (step 0a)"
         if phase == "idle":
-            if not self.state.get("x_moved"):
-                return f"Phase: idle | REQUIRED NEXT: motor_x_move_tool (step 1a-i, x={self.t5_x:.3f})"
-            # Y축 확인은 사용자 '완료' 시 코드가 처리한다 (phase→scanning). 모델은 Y 이동 메시지만 출력.
-            return f"Phase: idle | REQUIRED NEXT: Y-axis move message (step 1a-ii, y={self.t5_y:.3f})"
+            return f"Phase: idle | REQUIRED NEXT: position move message (step 1a, x={self.t5_x:.3f}, y={self.t5_y:.3f})"
         current_energy = self.state.get("current_energy")
         scan_order = self.state.get("scan_order", [])
         idx = scan_order.index(current_energy) + 1 if current_energy in scan_order else 0
@@ -281,7 +272,7 @@ When ALL energies are completed, the SYSTEM sends the completion message and end
         """현재 진행 상황 요약 출력 (Dash보드 스타일)"""
         print(f"\n📊 Energy Scan Progress Summary:")
         print("-" * 70)
-        tower = self.state.get('tower', 'T5')
+        tower = self.state.get('tower', 'M5T3')
         print(f"Tower: {tower} | Position: x={self.t5_x:.3f}, y={self.t5_y:.3f}")
         print("-" * 70)
 
@@ -326,11 +317,11 @@ When ALL energies are completed, the SYSTEM sends the completion message and end
         return self._format_progress()
 
     def _on_user_input(self, user_input: str):
-        # 1) Y축 이동 확인 (T5 고정 위치이므로 스캔당 1회). 코드가 직접 처리.
-        if self.state.get("x_moved") and not self.state.get("y_confirmed"):
+        # 1) 이동 확인 (M5T3 고정 위치이므로 스캔당 1회). 코드가 직접 처리.
+        if self.state.get("phase") == "idle" and not self.state.get("y_confirmed"):
             self.state["y_confirmed"] = True
             self.state["phase"] = "scanning"
-            self.log("Y-axis confirmed by user → phase=scanning")
+            self.log("Position confirmed by user → phase=scanning")
             return
         # 2) DAQ 후 plot 확인 → 현재 에너지 완료 처리 (코드가 소유)
         if self.state.get("needs_plot_confirm"):
@@ -343,7 +334,7 @@ When ALL energies are completed, the SYSTEM sends the completion message and end
                 self.log(f"{e} GeV plot 확인 완료 → completed")
 
     def _position_for_current_step(self) -> Optional[Dict[str, float]]:
-        """EM Scan은 T5 고정 위치."""
+        """EM Scan은 M5T3 고정 위치."""
         return {"x": self.t5_x, "y": self.t5_y}
 
     def _resolve_daq_energy_key(self):
@@ -369,19 +360,6 @@ When ALL energies are completed, the SYSTEM sends the completion message and end
         
         if tool_name == "none":
             return "no_tool_executed"
-
-        elif tool_name == "motor_x_move_tool":
-            x = self._motor_x_for_current_step()
-            self.io.send_tool_output(f"[Motor] X축 이동 시작 (T5): {x:.3f} mm")
-            def _do_move():
-                ok, msg = motor.move_x(x)
-                if not ok:
-                    raise RuntimeError(msg)
-                return msg
-            result = self._run_tool_with_retry(_do_move, "motor_x_move_tool")
-            self.io.send_tool_output(f"[Motor] {result}")
-            self.state["x_moved"] = True
-            return result
 
         elif tool_name == "daq_run_tool":
             energy_key = self._resolve_daq_energy_key()
@@ -440,11 +418,11 @@ When ALL energies are completed, the SYSTEM sends the completion message and end
 
     # Fields the LLM must not overwrite.
     # - init-only config: tower, daq_config, start_time, plot_method, plot_max_event
-    # - code-owned bookkeeping (driver/_on_user_input/_execute_tool set these): x_moved,
+    # - code-owned bookkeeping (driver/_on_user_input/_execute_tool set these):
     #   y_confirmed, needs_plot_confirm, current_energy_idx, last_run_number
     _PROTECTED_FIELDS = frozenset({
         "tower", "daq_config", "start_time", "plot_method", "plot_max_event",
-        "x_moved", "y_confirmed", "needs_plot_confirm", "current_energy_idx",
+        "y_confirmed", "needs_plot_confirm", "current_energy_idx",
         "last_run_number",
     })
 
@@ -520,7 +498,7 @@ When ALL energies are completed, the SYSTEM sends the completion message and end
         done = sum(1 for c in self.state['energy_config'].values() if c.get('completed'))
         lines = [
             f"📊 Energy Scan  —  {done} / {total} 완료",
-            f"T5 위치:  x = {self.t5_x:.3f},  y = {self.t5_y:.3f}",
+            f"M5T3 위치:  x = {self.t5_x:.3f},  y = {self.t5_y:.3f}",
             "─" * 36,
         ]
         for energy in self.state['scan_order']:

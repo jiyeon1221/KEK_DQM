@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Position Calculator — T5 기준 타워 위치 계산"""
+"""Position Calculator — M5T3 기준 타워 위치 계산"""
 
 import math
 from typing import Dict, Any, Optional
@@ -7,17 +7,24 @@ from .config_loader import load_config
 
 
 # ======================= Tower Layout =======================
+r"""
+타워 레이아웃 (6x6 그리드, 9모듈 × 4타워 = 36타워):
+
+    Row\Col  0     1     2     3     4     5
+      0    M1T1  M1T2  M2T1  M2T2  M3T1  M3T2
+      1    M1T3  M1T4  M2T3  M2T4  M3T3  M3T4
+      2    M4T1  M4T2  M5T1  M5T2  M6T1  M6T2
+      3    M4T3  M4T4  M5T3  M5T4  M6T3  M6T4   ← 기준행 row=3
+      4    M7T1  M7T2  M8T1  M8T2  M9T1  M9T2
+      5    M7T3  M7T4  M8T3  M8T4  M9T3  M9T4
+                       ↑ 기준열 col=2 (M5T3)
+
+M5T3가 기준점(dx=0, dy=0)이며, 수식으로 오프셋 계산됨.
+  grid_col = 2 * ((m-1) % 3) + (t-1) % 2
+  grid_row = 2 * ((m-1) // 3) + (t-1) // 2
 """
-타워 레이아웃 (3x3 그리드):
 
-    T1  T2  T3
-    T4  T5  T6
-    T7  T8  T9
-
-T5가 중심이며, 다른 타워들은 SWITCH 함수를 통해 오프셋 계산됨.
-"""
-
-VALID_TOWERS = ["T1", "T2", "T3", "T4", "T5", "T6", "T7", "T8", "T9"]
+VALID_TOWERS = [f"M{m}T{t}" for m in range(1, 10) for t in range(1, 5)]
 
 
 # ======================= Position Calculator =======================
@@ -57,34 +64,16 @@ class PositionCalculator_Sym:
         self.tilting = 0.0
 
     def _tower_offset_x(self, tower: str) -> float:
-        """
-        타워별 X 방향 오프셋 (B43 수식)
-
-        SWITCH(B6,
-          "T1", B41, "T4", B41, "T7", B41,
-          "T2", 0,   "T5", 0,   "T8", 0,
-          "T3", -B41, "T6", -B41, "T9", -B41)
-        """
-        if tower in ("T1", "T4", "T7"):
-            return self.tower_width
-        if tower in ("T3", "T6", "T9"):
-            return -self.tower_width
-        return 0.0
+        """타워별 X 방향 오프셋 (M5T3 기준, ref col=2)"""
+        m, t = int(tower[1]), int(tower[3])
+        grid_col = 2 * ((m - 1) % 3) + (t - 1) % 2
+        return -(grid_col - 2) * self.tower_width  # ref: M5T3 col=2
 
     def _tower_offset_y(self, tower: str) -> float:
-        """
-        타워별 Y 방향 오프셋 (C43 수식)
-
-        SWITCH(B6,
-          "T1", -C41, "T2", -C41, "T3", -C41,
-          "T4", 0,    "T5", 0,    "T6", 0,
-          "T7", C41,  "T8", C41,  "T9", C41)
-        """
-        if tower in ("T1", "T2", "T3"):
-            return -self.tower_height
-        if tower in ("T7", "T8", "T9"):
-            return self.tower_height
-        return 0.0
+        """타워별 Y 방향 오프셋 (M5T3 기준, ref row=3)"""
+        m, t = int(tower[1]), int(tower[3])
+        grid_row = 2 * ((m - 1) // 3) + (t - 1) // 2
+        return (grid_row - 3) * self.tower_height  # ref: M5T3 row=3
 
     def calculate_tower_position(self, tower: str,
                                  rotation: Optional[float] = None,
@@ -167,25 +156,54 @@ class PositionCalculator:
 
     모듈 크기가 모두 다를 경우 사용.
     TowerWidth/TowerHeight 기반 균일 간격 대신,
-    센터 타워(T5)로부터 각 타워까지의 x,y 거리를 아래 TOWER_OFFSETS에 직접 기재한다.
+    기준 타워(M5T3)로부터 각 타워까지의 x,y 거리를 아래 TOWER_OFFSETS에 직접 기재한다.
 
-    Rotation/Tilting 보정 방식은 PositionCalculator와 동일.
+    Rotation/Tilting 보정 방식은 PositionCalculator_Sym과 동일.
     """
 
-    # ── 타워별 T5 기준 상대 거리 (mm) ── 직접 수정하세요 ──────────────────
-    #   T1  T2  T3
-    #   T4  T5  T6
-    #   T7  T8  T9
+    # ── 타워별 M5T3 기준 상대 거리 (mm) ── 직접 수정하세요 ──────────────────
+    # Approximate values based on uniform 46.75mm × 49.0mm grid; refine with actual measurements
+    #
+    # grid_col = 2*((m-1)%3) + (t-1)%2
+    # grid_row = 2*((m-1)//3) + (t-1)//2
+    # dx = -(grid_col - 2) * 46.75,  dy = (grid_row - 3) * 49.0
     TOWER_OFFSETS: Dict[str, Dict[str, float]] = {
-        "T1": {"dx":  46.75, "dy":  -49.0},
-        "T2": {"dx":  0.5, "dy":  -46.75},
-        "T3": {"dx":  -44.75, "dy":  -48.5},
-        "T4": {"dx":  44.75, "dy":  0.5},
-        "T5": {"dx":  0.0, "dy":  0.0},
-        "T6": {"dx":  -45.0, "dy":  0.5},
-        "T7": {"dx":  45.75, "dy":  50.25},
-        "T8": {"dx":  -0.25, "dy":  47.5},
-        "T9": {"dx":  -45.5, "dy": 49.75},
+        "M1T1": {"dx":  93.5,  "dy": -147.0},
+        "M1T2": {"dx":  46.75, "dy": -147.0},
+        "M1T3": {"dx":  93.5,  "dy":  -98.0},
+        "M1T4": {"dx":  46.75, "dy":  -98.0},
+        "M2T1": {"dx":   0.0,  "dy": -147.0},
+        "M2T2": {"dx": -46.75, "dy": -147.0},
+        "M2T3": {"dx":   0.0,  "dy":  -98.0},
+        "M2T4": {"dx": -46.75, "dy":  -98.0},
+        "M3T1": {"dx": -93.5,  "dy": -147.0},
+        "M3T2": {"dx": -140.25,"dy": -147.0},
+        "M3T3": {"dx": -93.5,  "dy":  -98.0},
+        "M3T4": {"dx": -140.25,"dy":  -98.0},
+        "M4T1": {"dx":  93.5,  "dy":  -49.0},
+        "M4T2": {"dx":  46.75, "dy":  -49.0},
+        "M4T3": {"dx":  93.5,  "dy":    0.0},
+        "M4T4": {"dx":  46.75, "dy":    0.0},
+        "M5T1": {"dx":   0.0,  "dy":  -49.0},
+        "M5T2": {"dx": -46.75, "dy":  -49.0},
+        "M5T3": {"dx":   0.0,  "dy":    0.0},
+        "M5T4": {"dx": -46.75, "dy":    0.0},
+        "M6T1": {"dx": -93.5,  "dy":  -49.0},
+        "M6T2": {"dx": -140.25,"dy":  -49.0},
+        "M6T3": {"dx": -93.5,  "dy":    0.0},
+        "M6T4": {"dx": -140.25,"dy":    0.0},
+        "M7T1": {"dx":  93.5,  "dy":   49.0},
+        "M7T2": {"dx":  46.75, "dy":   49.0},
+        "M7T3": {"dx":  93.5,  "dy":   98.0},
+        "M7T4": {"dx":  46.75, "dy":   98.0},
+        "M8T1": {"dx":   0.0,  "dy":   49.0},
+        "M8T2": {"dx": -46.75, "dy":   49.0},
+        "M8T3": {"dx":   0.0,  "dy":   98.0},
+        "M8T4": {"dx": -46.75, "dy":   98.0},
+        "M9T1": {"dx": -93.5,  "dy":   49.0},
+        "M9T2": {"dx": -140.25,"dy":   49.0},
+        "M9T3": {"dx": -93.5,  "dy":   98.0},
+        "M9T4": {"dx": -140.25,"dy":   98.0},
     }
     # ──────────────────────────────────────────────────────────────────────
 
@@ -225,7 +243,7 @@ class PositionCalculator:
         특정 타워의 중심 위치 계산 (Rotation/Tilting 적용)
 
         계산 구조:
-        - dx, dy = TOWER_OFFSETS[tower]  (T5 기준 상대 거리)
+        - dx, dy = TOWER_OFFSETS[tower]  (M5T3 기준 상대 거리)
         - x = offset_x + dx + rotation_term
         - y = offset_y + dy * cos(θ)
               - ( center_to_bottom * cos(θ) + axis_to_module * sin(θ) - center_to_bottom )

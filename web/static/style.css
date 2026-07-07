@@ -283,15 +283,6 @@ html, body { height: 100%; font-family: 'Segoe UI', system-ui, sans-serif; backg
   gap: 10px; align-content: start;
 }
 
-#motor-pos-bar {
-  flex-shrink: 0;
-  padding: 4px 14px;
-  font-size: 11px; font-family: monospace;
-  color: var(--muted);
-  background: var(--surface);
-  border-top: 1px solid var(--border);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
 
 .dqm-cell {
   background: #fff;
@@ -721,3 +712,97 @@ html, body { height: 100%; font-family: 'Segoe UI', system-ui, sans-serif; backg
   position: absolute; top: 16px; right: 22px;
   font-size: 28px; color: #fff; cursor: pointer; line-height: 1;
 }
+
+/* ── Tower Picker Modal ───────────────────────────────────── */
+#tower-picker-overlay {
+  display: none; position: fixed; inset: 0;
+  background: rgba(0,0,0,0.65); z-index: 80;
+  align-items: center; justify-content: center;
+}
+#tower-picker-overlay.open { display: flex; }
+
+#tower-picker-panel {
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  border-radius: 14px;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.8);
+  animation: popIn 0.2s ease;
+  overflow: hidden;
+  display: flex; flex-direction: column;
+  max-width: 95vw;
+}
+
+#tower-picker-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 13px 18px;
+  border-bottom: 1px solid var(--border);
+  font-size: 14px; font-weight: 700; color: var(--accent);
+  letter-spacing: 0.03em;
+}
+#tower-picker-title { flex: 1; }
+#tower-picker-hint  { font-size: 11px; color: var(--muted); font-weight: 400; margin: 0 16px; }
+#tower-picker-close { font-size: 18px; color: var(--muted); cursor: pointer; padding: 2px 6px; border-radius: 4px; }
+#tower-picker-close:hover { color: var(--text); background: var(--border); }
+
+#tower-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 72px);
+  grid-template-rows: repeat(6, 52px);
+  gap: 6px;
+  padding: 18px;
+  user-select: none;
+}
+
+.tower-cell {
+  border: 2px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg);
+  color: var(--muted);
+  font-size: 12px; font-weight: 600;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  transition: background 0.1s, border-color 0.1s, color 0.1s;
+}
+.tower-cell:hover { border-color: var(--accent); color: var(--text); }
+.tower-cell.selected {
+  background: #1a2d52;
+  border-color: var(--accent);
+  color: #a8c8ff;
+}
+
+#pos-options {
+  padding: 12px 18px 4px;
+  border-top: 1px solid var(--border);
+  display: flex; flex-direction: column; gap: 12px;
+}
+.pos-opt-group { display: flex; align-items: center; gap: 12px; }
+.pos-opt-label { font-size: 12px; color: var(--muted); min-width: 90px; }
+.pos-opt-btns { display: flex; gap: 8px; flex-wrap: wrap; }
+.pos-opt-btn {
+  padding: 6px 16px; border-radius: 7px;
+  border: 2px solid var(--border); background: var(--bg);
+  color: var(--muted); font-size: 12px; font-weight: 600; cursor: pointer;
+  transition: background 0.1s, border-color 0.1s, color 0.1s;
+}
+.pos-opt-btn:hover { border-color: var(--accent); color: var(--text); }
+.pos-opt-btn.selected {
+  background: #1a2d52; border-color: var(--accent); color: #a8c8ff;
+}
+
+#tower-picker-footer {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 18px;
+  border-top: 1px solid var(--border);
+  gap: 10px;
+}
+#tower-picker-count { font-size: 12px; color: var(--muted); }
+#tower-picker-clear { padding: 6px 14px; border-radius: 6px; border: 1px solid var(--border); background: transparent; color: var(--muted); cursor: pointer; font-size: 12px; }
+#tower-picker-clear:hover { color: var(--text); border-color: var(--text); }
+#tower-picker-confirm {
+  padding: 7px 22px; border-radius: 7px; border: none;
+  background: var(--accent); color: #fff;
+  font-size: 13px; font-weight: 700; cursor: pointer;
+  transition: background 0.15s;
+}
+#tower-picker-confirm:hover { background: var(--accent-h); }
+#tower-picker-confirm:disabled { background: var(--border); color: var(--muted); cursor: not-allowed; }

@@ -15,7 +15,7 @@ Channel Specification:
 - 'odd': 홀수 채널번호 (모든 슬롯)
 - 'slot:12': 슬롯 12의 모든 채널
 - 'slot:12:even' / 'slot:12:odd': 슬롯 + 짝홀 조합
-- ['T1C', 'T2C']: Name으로 지정 → config에서 (slot, ch) 자동 매핑
+- ['M1T1C', 'M1T2C']: Name으로 지정 → config에서 (slot, ch) 자동 매핑
 - [{'slot': 11, 'ch': 3}]: 명시적 (slot, ch) 지정
 - '11:3': slot 11, ch 3
 """
@@ -69,7 +69,7 @@ class HVControlTool(BaseTool):
                 "4) 'off' - Turn off HV channels (requires: channels), "
                 "5) 'status' - Check HV status (optional: channels). "
                 "Channels: 'all', 'even', 'odd', 'slot:12', 'slot:12:even', "
-                "names like ['T1C','T2C'], explicit [{'slot':11,'ch':3}], or '11:3' pairs."
+                "names like ['M1T1C','M1T2C'], explicit [{'slot':11,'ch':3}], or '11:3' pairs."
             )
         )
         self.ssh_client = None
@@ -621,7 +621,7 @@ class HVControlTool(BaseTool):
         """단일 식별자 → (slot, ch) 리스트.
 
         지원 형식:
-        - "T1C"      → name lookup
+        - "M1T1C"    → name lookup
         - "11:3"     → 명시적 slot:ch
         - "3"        → ch==3 인 모든 (slot, ch) [슬롯 무관]
         """
@@ -645,10 +645,39 @@ class HVControlTool(BaseTool):
                 f"'slot:{slot_list.split(',')[0].strip()}:{ch}' 형식으로 지정해주세요."
             )
 
-        # Name lookup
         name_key = identifier.upper()
+
+        # C / S side 선택: M#T#C (Cherenkov) 또는 M#T#S (Scintillation) 채널 전체
+        if name_key in ("C", "S"):
+            return sorted(
+                pair for name, pair in name_map.items()
+                if re.match(rf'^M\d+T\d+{name_key}$', name)
+            )
+
+        # Tower 선택: "T1"~"T4" → 모든 모듈의 해당 타워 채널 (M?T{n}C, M?T{n}S)
+        tower_m = re.match(r'^T([1-4])$', name_key)
+        if tower_m:
+            tn = tower_m.group(1)
+            return sorted(
+                pair for name, pair in name_map.items()
+                if re.match(rf'^M\d+T{tn}[CS]$', name)
+            )
+
+        # Name lookup
         if name_key in name_map:
             return [name_map[name_key]]
+
+        # Module shorthand: "M5" → M5T1C, M5T1S, M5T2C, M5T2S, M5T3C, M5T3S, M5T4C, M5T4S
+        mod_m = re.match(r'^M([1-9])$', name_key)
+        if mod_m:
+            mod_num = mod_m.group(1)
+            result = []
+            for t in range(1, 5):
+                for s in ('C', 'S'):
+                    ch = f"M{mod_num}T{t}{s}"
+                    if ch in name_map:
+                        result.append(name_map[ch])
+            return result
 
         return []
 

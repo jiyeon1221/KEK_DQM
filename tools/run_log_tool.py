@@ -89,8 +89,8 @@ class RunLogTool(BaseTool):
 
     def _build_hv_drc_string(self, name_to_vset: Dict[str, str]) -> str:
         """fixed_hv.txt 유무에 따라 DRC HV 문자열 생성"""
-        # 그룹: 타워 T1-T9는 (S, C) 쌍, MCP는 (MCP-S, MCP-C) 쌍
-        groups = [(f"T{i}S", f"T{i}C") for i in range(1, 10)] + [("MCP-S", "MCP-C")]
+        # 그룹: M{1-9}T{1-4} 각각 (S, C) 쌍
+        groups = [(f"M{m}T{t}S", f"M{m}T{t}C") for m in range(1, 10) for t in range(1, 5)]
 
         if self._FIXED_HV_PATH.exists():
             fixed = self._parse_fixed_hv(self._FIXED_HV_PATH)

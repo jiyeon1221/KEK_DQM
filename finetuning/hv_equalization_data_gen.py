@@ -2,11 +2,6 @@
 """
 Training data generator for HV Equalization Agent
 
-autoTB 이전 버전과의 차이:
-  Step 1a (이동해주세요) →
-    1a-i.  motor_x_move_tool  (자동 X 이동)
-    1a-ii. Y축 수동 이동 메시지
-
 build_full_context / _build_state_context / _get_step_hint 포맷이
 HVEqualizationAgent(hv_equalization_agent.py)와 완전히 동일하도록 유지.
 """
@@ -21,12 +16,13 @@ from typing import List, Dict, Any, Optional
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from config import MSG_PLOT_CONFIRM, MSG_HV_CONFIRM
 
-TOWER_ORDER = ["T1", "T2", "T3", "T6", "T5", "T4", "T7", "T8", "T9"]
+# HV 로직은 타워마다 동일 — 대표 타워 6개로 학습 (모듈·타워번호 다양성 확보)
+TOWER_ORDER = ["M1T1", "M2T3", "M3T2", "M5T3", "M7T4", "M9T2"]
 
-MESSAGE_Y_MOVE_REQ   = "X축 자동 이동 완료 ({x:.3f} mm). Y축을 {y:.3f}으로 이동해주세요."
+MESSAGE_MOVE_REQ     = "x = {x:.3f} mm, y = {y:.3f} mm 으로 이동해주세요."
 MESSAGE_PLOT_CONFIRM = MSG_PLOT_CONFIRM
 MESSAGE_HV_CONFIRM   = MSG_HV_CONFIRM
-# {c}/{s}: 타워별 채널명 (예: T5C/T5S). 호출부에서 c=f"{tower}C", s=f"{tower}S" 전달.
+# {c}/{s}: 타워별 채널명 (예: M1T1C/M1T1S). 호출부에서 c=f"{tower}C", s=f"{tower}S" 전달.
 MESSAGE_APPROVE_BOTH = "분석 결과, 현재 ADC: {c}={adc_c:.1f}, {s}={adc_s:.1f} (목표: {target}). HV 변경 제안: {c} {hv_c_old}V→{hv_c_new}V, {s} {hv_s_old}V→{hv_s_new}V. 적용하시겠습니까?"
 MESSAGE_APPROVE_C    = "분석 결과, 현재 ADC: {c}={adc_c:.1f} (목표: {target}). HV 변경 제안: {c} {hv_c_old}V→{hv_c_new}V. ({s} 완료) 적용하시겠습니까?"
 MESSAGE_APPROVE_S    = "분석 결과, 현재 ADC: {s}={adc_s:.1f} (목표: {target}). HV 변경 제안: {s} {hv_s_old}V→{hv_s_new}V. ({c} 완료) 적용하시겠습니까?"
@@ -45,14 +41,11 @@ Your task: adjust HV for {t}C and {t}S channels to reach the target peakADC valu
 Follow these steps EXACTLY:
 
 === Workflow for {t} ===
-1a-i. Move X-axis automatically (no user input needed):
-  {{"tool": "motor_x_move_tool", "params": {{"x": {x:.3f}}}}}
+1a. Ask user to move to tower position:
+  {{"message": "x = {x:.3f} mm, y = {y:.3f} mm 으로 이동해주세요."}}
 
-1a-ii. After motor completes, request Y-axis from user:
-  {{"message": "X축 자동 이동 완료 ({x:.3f} mm). Y축을 {y:.3f}으로 이동해주세요."}}
-
-After user says "완료" to the Y-axis message:
-The SYSTEM marks Y-axis confirmed automatically — do NOT output any state update for it.
+After user says "완료":
+The SYSTEM marks position confirmed automatically — do NOT output any state update for it.
 1b. Check HV status:
   {{"tool": "hv_execute_tool", "params": {{"command": "status", "channels": ["{t}C", "{t}S"]}}}}
 
@@ -71,7 +64,7 @@ The SYSTEM marks Y-axis confirmed automatically — do NOT output any state upda
   Both not done: {{"message": "분석 결과, 현재 ADC: {t}C=<adc_c>, {t}S=<adc_s> (목표: <target>). HV 변경 제안: {t}C <old_c>V→<new_c>V, {t}S <old_s>V→<new_s>V. 적용하시겠습니까?", "update_state": {{"phase": "approving"}}}}
   Only C not done: {{"message": "분석 결과, 현재 ADC: {t}C=<adc_c> (목표: <target>). HV 변경 제안: {t}C <old_c>V→<new_c>V. ({t}S 완료) 적용하시겠습니까?", "update_state": {{"phase": "approving"}}}}
   Only S not done: {{"message": "분석 결과, 현재 ADC: {t}S=<adc_s> (목표: <target>). HV 변경 제안: {t}S <old_s>V→<new_s>V. ({t}C 완료) 적용하시겠습니까?", "update_state": {{"phase": "approving"}}}}
-  CRITICAL: Use EXACT values from state (last_suggested_hv_c/s, last_adc_c/s) — NEVER fabricate numbers.
+  CRITICAL: Copy the "현재→제안" arrow (e.g. C 775V→785V) EXACTLY from the state's "HV 변경 제안" line — keep the old→new order, do NOT swap the two numbers. Use EXACT ADC values (last_adc_c/s). NEVER fabricate numbers.
   If user requests manual HV adjustment (e.g. "C를 800으로", "S 10 올려줘"):
     Update suggested values via update_state and re-send approval message:
     {{"message": "...(updated approval)...", "update_state": {{"last_suggested_hv_c": <new_c>, "last_suggested_hv_s": <new_s>}}}}
@@ -93,7 +86,7 @@ After user says "완료":
 
 === CRITICAL RULES ===
 1. Follow steps STRICTLY in order. Do NOT skip Step 1e (Approval).
-2. Step 1a-i ALWAYS comes before 1a-ii.
+2. Step 1a ALWAYS comes before 1b.
 3. Output JSON ONLY. No natural language.
 4. NEVER include a done channel in channel_values.
 5. ALWAYS use EXACT numbers from state — never invent values.
@@ -111,14 +104,12 @@ def _build_state_context(state: Dict) -> str:
     suggest_pending = state.get("last_suggested_hv_c") is not None
     phase = state.get("phase", "idle")
 
-    # Step 1a detection (motor-aware)
+    # Step 1a detection
     if state.get("last_hv_c") is None:
-        if not state.get("x_moved"):
-            lines.append(f"*** REQUIRED NEXT: motor_x_move_tool (step 1a-i) — auto-move X to {tower} ***")
-        elif not state.get("y_confirmed"):
-            lines.append(f"*** REQUIRED NEXT: Y-axis move message (step 1a-ii) — ask user to move Y to {tower} ***")
+        if not state.get("y_confirmed"):
+            lines.append(f"*** REQUIRED NEXT: position move message (step 1a) — ask user to move to {tower} position ***")
         else:
-            lines.append(f"*** REQUIRED NEXT: hv_execute_tool status (step 1b) — Y-axis confirmed, check HV now ***")
+            lines.append(f"*** REQUIRED NEXT: hv_execute_tool status (step 1b) — position confirmed, check HV now ***")
         lines.append("")
 
     if state.get("needs_plot_confirm"):
@@ -149,7 +140,7 @@ def _build_state_context(state: Dict) -> str:
         lines.append("")
 
     lines.append(f"Phase: {phase}")
-    lines.append(f"Tower: {tower} (x:{pos_x:.3f}, y:{pos_y:.3f})  [X moved: {state.get('x_moved', False)}]")
+    lines.append(f"Tower: {tower} (x:{pos_x:.3f}, y:{pos_y:.3f})  [Position confirmed: {state.get('y_confirmed', False)}]")
     lines.append(f"Beam Energy: {state.get('beam_energy')} GeV")
     lines.append(f"Target Events: {state.get('target_events')}")
     lines.append(f"Target ADC: {state.get('target_adc_c')}")
@@ -158,9 +149,11 @@ def _build_state_context(state: Dict) -> str:
     if state.get("last_suggested_hv_c") is not None:
         dc = state.get("channel_done_c", False)
         ds = state.get("channel_done_s", False)
-        c_str = f"C={state['last_suggested_hv_c']}V" + (" [DONE-skip]" if dc else "")
-        s_str = f"S={state['last_suggested_hv_s']}V" + (" [DONE-skip]" if ds else "")
-        lines.append(f"Suggested HV: {c_str}, {s_str}  <- use EXACT values in approval message")
+        oc, nc = state.get("last_hv_c"), state["last_suggested_hv_c"]
+        os_, ns = state.get("last_hv_s"), state["last_suggested_hv_s"]
+        c_str = "C 완료" if dc else f"C {oc:.0f}V→{nc}V"
+        s_str = "S 완료" if ds else f"S {os_:.0f}V→{ns}V"
+        lines.append(f"HV 변경 제안 (현재→제안, 이 화살표를 그대로 승인 메시지에 복사): {c_str}, {s_str}")
     if state.get("last_run_number"):
         lines.append(f"Last Run Number: {state['last_run_number']}")
     lines.append(f"Iterations: {state.get('iterations', 0)}")
@@ -187,12 +180,10 @@ def _get_step_hint(state: Dict) -> str:
     base = f"Phase: {phase} | Tower: {tower}"
 
     if state.get("last_hv_c") is None:
-        if not state.get("x_moved"):
-            return f"{base} | REQUIRED NEXT: motor_x_move_tool (step 1a-i)"
-        elif not state.get("y_confirmed"):
-            return f"{base} | REQUIRED NEXT: Y-axis move message (step 1a-ii)"
+        if not state.get("y_confirmed"):
+            return f"{base} | REQUIRED NEXT: position move message (step 1a)"
         else:
-            return f"{base} | REQUIRED NEXT: hv_execute_tool status (step 1b — Y-axis confirmed)"
+            return f"{base} | REQUIRED NEXT: hv_execute_tool status (step 1b — position confirmed)"
     elif adc_known and done_c and done_s:
         return f"{base} | CONVERGED → call hv_equalization_done_channel (step 1h)"
     elif adc_known and suggest_pending and phase == "approving":
@@ -357,7 +348,6 @@ def generate_workflow(tower: str, x: float, y: float,
         "target_adc_s": target_adc,
         "current_tower": tower,
         "tower_pos": {"x": x, "y": y},
-        "x_moved": False,
         "last_hv_c": None,
         "last_hv_s": None,
         "last_suggested_hv_c": None,
@@ -421,19 +411,12 @@ def generate_workflow(tower: str, x: float, y: float,
         state["last_hv_s"] = hv_s
         state["last_run_number"] = run_number - 1
         state["iterations"] = start_iter
-        state["x_moved"] = True  # 중간 상태에서는 이미 X 이동 완료
-        state["y_confirmed"] = True  # 중간 상태에서는 이미 Y축 확인 완료
+        state["y_confirmed"] = True  # 중간 상태에서는 이미 위치 확인 완료
         state["needs_suggest"] = False  # 압축된 히스토리는 suggest 완료 상태
 
-    # ── 1a-i: Motor X move ────────────────────────────────────────────
+    # ── 1a: Position move message ─────────────────────────────────────
     if start_iter == 0:
-        dec = {"tool": "motor_x_move_tool", "params": {"x": x}}
-        examples.append(make_example(state, history, dec))
-        history.append({"role": "assistant", "content": json.dumps(dec, ensure_ascii=False)})
-        state["x_moved"] = True
-
-        # ── 1a-ii: Y move message ─────────────────────────────────────
-        dec = {"message": MESSAGE_Y_MOVE_REQ.format(x=x, y=y)}
+        dec = {"message": MESSAGE_MOVE_REQ.format(x=x, y=y)}
         examples.append(make_example(state, history, dec))
         history.append({"role": "assistant", "content": json.dumps(dec, ensure_ascii=False)})
         history.append({"role": "user", "content": "완료"})
@@ -581,7 +564,6 @@ def generate_manual_adjust_workflow(tower: str, x: float, y: float,
         "target_adc_s": target_adc,
         "current_tower": tower,
         "tower_pos": {"x": x, "y": y},
-        "x_moved": True,
         "y_confirmed": True,
         "last_hv_c": hv_c,
         "last_hv_s": hv_s,
@@ -598,7 +580,7 @@ def generate_manual_adjust_workflow(tower: str, x: float, y: float,
         "needs_plot_confirm": False,
     }
 
-    # Build partial history: motor, Y-move, status, DAQ, suggest already done
+    # Build partial history: position move, status, DAQ, suggest already done
     adc_frac = random.uniform(0.82, 0.95)
     adc_c = round(target_adc * adc_frac + random.uniform(-8, 8), 1)
     adc_s = round(target_adc * adc_frac + random.uniform(-8, 8), 1)
@@ -607,11 +589,9 @@ def generate_manual_adjust_workflow(tower: str, x: float, y: float,
     next_hv_c = hv_c + (delta_c if not done_c else 0)
     next_hv_s = hv_s + (delta_s if not done_s else 0)
 
-    # Prepopulate history with steps 1a-i through 1d
+    # Prepopulate history with steps 1a through 1d
     history.append({"role": "assistant", "content": json.dumps(
-        {"tool": "motor_x_move_tool", "params": {"x": x}}, ensure_ascii=False)})
-    history.append({"role": "assistant", "content": json.dumps(
-        {"message": MESSAGE_Y_MOVE_REQ.format(x=x, y=y)}, ensure_ascii=False)})
+        {"message": MESSAGE_MOVE_REQ.format(x=x, y=y)}, ensure_ascii=False)})
     history.append({"role": "user", "content": "완료"})
     history.append({"role": "assistant", "content": json.dumps(
         {"tool": "hv_execute_tool", "params": {"command": "status", "channels": [f"{tower}C", f"{tower}S"]}},
@@ -697,18 +677,19 @@ def main():
         x = random.uniform(70.0, 130.0)
         y = random.uniform(70.0, 130.0)
         for pattern in CONVERGENCE_PATTERNS:
-            for _ in range(3):  # 3 random event/energy combos per pattern
+            for _ in range(1):  # 1 random event/energy combo per pattern (was 3, scaled for 36 towers)
                 energy = random.choice(ENERGY_CHOICES)
                 target_adc = random.choice(TARGET_ADC_CHOICES)
                 events = random_events()
                 all_ex.extend(generate_workflow(tower, x, y, energy, events, target_adc,
                                                 pattern, going_down=False))
-            # Going down variants for all patterns
-            energy = random.choice(ENERGY_CHOICES)
-            target_adc = random.choice(TARGET_ADC_CHOICES)
-            events = random_events()
-            all_ex.extend(generate_workflow(tower, x, y, energy, events, target_adc,
-                                            pattern, going_down=True))
+            # Going down variant (every other tower to reduce volume)
+            if TOWER_ORDER.index(tower) % 2 == 0:
+                energy = random.choice(ENERGY_CHOICES)
+                target_adc = random.choice(TARGET_ADC_CHOICES)
+                events = random_events()
+                all_ex.extend(generate_workflow(tower, x, y, energy, events, target_adc,
+                                                pattern, going_down=True))
 
     # ── Start-iter variants (mid-workflow training) ─────────────────────
     for tower in TOWER_ORDER:
@@ -723,7 +704,7 @@ def main():
             for start_iter in [1, 2, 3]:
                 if start_iter >= len(pattern):
                     continue
-                for _ in range(2):
+                for _ in range(1):  # was 2
                     energy = random.choice(ENERGY_CHOICES)
                     target_adc = random.choice(TARGET_ADC_CHOICES)
                     events = random_events()
@@ -736,7 +717,7 @@ def main():
         (True,  False),  # only S not done
         (False, True),   # only C not done
     ]
-    for tower in TOWER_ORDER:
+    for tower in TOWER_ORDER[::2]:  # every other tower (18 of 36) to control volume
         x = random.uniform(70.0, 130.0)
         y = random.uniform(70.0, 130.0)
         for step in partial_steps:
@@ -748,18 +729,6 @@ def main():
                     tower, x, y, energy, events, target_adc, step, scenario
                 ))
 
-    # ── Extra coverage: more towers with fresh positions ────────────────
-    for tower in ["T1", "T3", "T5", "T7", "T9"]:
-        x = random.uniform(70.0, 130.0)
-        y = random.uniform(70.0, 130.0)
-        for pattern in CONVERGENCE_PATTERNS:
-            energy = random.choice(ENERGY_CHOICES)
-            target_adc = random.choice(TARGET_ADC_CHOICES)
-            events = random_events()
-            all_ex.extend(generate_workflow(tower, x, y, energy, events, target_adc,
-                                            pattern, going_down=False))
-            all_ex.extend(generate_workflow(tower, x, y, energy, events, target_adc,
-                                            pattern, going_down=True))
 
     random.shuffle(all_ex)
 

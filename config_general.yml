@@ -1,13 +1,3 @@
-# ===== Motor (EZSmotor / azd_kren) =====
-Motor:
-  IP: "192.168.1.1"
-  Port: 502
-  Speed: 10.0
-  Acc: 100000
-  Dec: 100000
-  EZSBinary: /Users/yhep/AI/CERN2026/EZSmotor/azd_kren
-  UnitScale: 1.0
-
 BaseDirectory: "/Volumes/yhep/scratch/YUdaq"
 Mapping: "/Users/yhep/AI/CERN2026/DQM/mapping/toymapping.root"
 
@@ -44,10 +34,10 @@ HV:
     WrapperWorkDir: "/home/yoolab/Downloads/CAENHV/SY4527/CAENHVWrapper/HVWrapperDemo"
     ConfigFullPath: "/home/yoolab/Downloads/CAENHV/SY4527/CAENHVWrapper/config/config.txt"
 
-# ===== Position Scan 결과 (T5 기준 절대 좌표, mm) =====
+# ===== Position Scan 결과 (기준 절대 좌표, mm) =====
 PositionScan:
-  OffsetX: 107.64      # T5 중심 X 좌표 (mm)
-  OffsetY: 976.3        # T5 중심 Y 좌표 (mm)
+  OffsetX: 107.64      # 기준 X 좌표 (mm)
+  OffsetY: 976.3        # 기준 Y 좌표 (mm)
   TowerWidth: 46.333    # X 방향 타워 간격 (mm)  — PositionCalculator_Sym 전용
   TowerHeight: 50.0     # Y 방향 타워 간격 (mm)  — PositionCalculator_Sym 전용
 
@@ -128,7 +118,7 @@ PedestalBins:
     S: 50    # MCP scintillator single channels (S1..S64)
     C: 50    # MCP cerenkov single channels    (C1..C64)
   # ByName:
-  #   T1-C: 80     # uncomment to override a specific module channel
+  #   M1-T1-C: 80  # uncomment to override a specific module channel (format: M{1-9}-T{1-4}-{C,S})
   #   WCX:   80    # or a wire-chamber channel
 
 ModuleConfig:
@@ -142,24 +132,79 @@ ModuleConfig:
   WCX: [400, 800]
   WCY: [400, 800]
   NIM: [400, 800]
-  T1-S: [120, 310]
-  T2-S: [120, 310]
-  T3-S: [120, 310]
-  T4-S: [120, 310]
-  T5-S: [120, 300] # MCP Center Tower
-  T6-S: [120, 310]
-  T7-S: [120, 310]
-  T8-S: [120, 310]
-  T9-S: [120, 310]
-  T1-C: [120, 310]
-  T2-C: [120, 310]
-  T3-C: [120, 310]
-  T4-C: [120, 310]
-  T5-C: [125, 230] # MCP Center Tower
-  T6-C: [120, 310]
-  T7-C: [120, 310]
-  T8-C: [120, 310]
-  T9-C: [120, 310]
+  # DRC channels: M{1-9}-T{1-4}-{S,C}  (9 modules × 4 towers × 2 sides = 72 channels)
+  M1-T1-S: [120, 310]
+  M1-T1-C: [120, 310]
+  M1-T2-S: [120, 310]
+  M1-T2-C: [120, 310]
+  M1-T3-S: [120, 310]
+  M1-T3-C: [120, 310]
+  M1-T4-S: [120, 310]
+  M1-T4-C: [120, 310]
+  M2-T1-S: [120, 310]
+  M2-T1-C: [120, 310]
+  M2-T2-S: [120, 310]
+  M2-T2-C: [120, 310]
+  M2-T3-S: [120, 310]
+  M2-T3-C: [120, 310]
+  M2-T4-S: [120, 310]
+  M2-T4-C: [120, 310]
+  M3-T1-S: [120, 310]
+  M3-T1-C: [120, 310]
+  M3-T2-S: [120, 310]
+  M3-T2-C: [120, 310]
+  M3-T3-S: [120, 310]
+  M3-T3-C: [120, 310]
+  M3-T4-S: [120, 310]
+  M3-T4-C: [120, 310]
+  M4-T1-S: [120, 310]
+  M4-T1-C: [120, 310]
+  M4-T2-S: [120, 310]
+  M4-T2-C: [120, 310]
+  M4-T3-S: [120, 310]
+  M4-T3-C: [120, 310]
+  M4-T4-S: [120, 310]
+  M4-T4-C: [120, 310]
+  M5-T1-S: [120, 310]
+  M5-T1-C: [120, 310]
+  M5-T2-S: [120, 310]
+  M5-T2-C: [120, 310]
+  M5-T3-S: [120, 310]
+  M5-T3-C: [120, 310]
+  M5-T4-S: [120, 310]
+  M5-T4-C: [120, 310]
+  M6-T1-S: [120, 310]
+  M6-T1-C: [120, 310]
+  M6-T2-S: [120, 310]
+  M6-T2-C: [120, 310]
+  M6-T3-S: [120, 310]
+  M6-T3-C: [120, 310]
+  M6-T4-S: [120, 310]
+  M6-T4-C: [120, 310]
+  M7-T1-S: [120, 310]
+  M7-T1-C: [120, 310]
+  M7-T2-S: [120, 310]
+  M7-T2-C: [120, 310]
+  M7-T3-S: [120, 310]
+  M7-T3-C: [120, 310]
+  M7-T4-S: [120, 310]
+  M7-T4-C: [120, 310]
+  M8-T1-S: [120, 310]
+  M8-T1-C: [120, 310]
+  M8-T2-S: [120, 310]
+  M8-T2-C: [120, 310]
+  M8-T3-S: [120, 310]
+  M8-T3-C: [120, 310]
+  M8-T4-S: [120, 310]
+  M8-T4-C: [120, 310]
+  M9-T1-S: [120, 310]
+  M9-T1-C: [120, 310]
+  M9-T2-S: [120, 310]
+  M9-T2-C: [120, 310]
+  M9-T3-S: [120, 310]
+  M9-T3-C: [120, 310]
+  M9-T4-S: [120, 310]
+  M9-T4-C: [120, 310]
   HX1: [600, 900]
   HX2: [600, 900]
   HX3: [600, 900]

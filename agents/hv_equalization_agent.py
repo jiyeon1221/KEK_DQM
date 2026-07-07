@@ -14,7 +14,6 @@ from datetime import datetime
 
 from tools.daq_tool import DAQRunTool
 from tools.hv_control_tool import HVControlTool
-import tools.motor_control_tool as motor
 from tools.position_calculator_tool import calculate_position
 from tools.hv_equalization_tool import (
     hv_equalization_suggest,
@@ -86,7 +85,6 @@ class HVEqualizationAgent(BaseAgent):
             "last_run_number": None,
             "iterations": 0,
             "done": False,
-            "x_moved": False,
             "y_confirmed": False,
             "needs_suggest": False,
             "needs_plot_confirm": False,
@@ -107,14 +105,11 @@ Your task: adjust HV for {t}C and {t}S channels to reach the target peakADC valu
 Follow these steps EXACTLY:
 
 === Workflow for {t} ===
-1a-i. Move X-axis automatically (no user input needed):
-  {{"tool": "motor_x_move_tool", "params": {{"x": {x:.3f}}}}}
+1a. Ask user to move to tower position:
+  {{"message": "x = {x:.3f} mm, y = {y:.3f} mm 으로 이동해주세요."}}
 
-1a-ii. After motor completes, request Y-axis from user:
-  {{"message": "X축 자동 이동 완료 ({x:.3f} mm). Y축을 {y:.3f}으로 이동해주세요."}}
-
-After user says "완료" to the Y-axis message:
-The SYSTEM marks Y-axis confirmed automatically — do NOT output any state update for it.
+After user says "완료":
+The SYSTEM marks position confirmed automatically — do NOT output any state update for it.
 1b. Check HV status:
   {{"tool": "hv_execute_tool", "params": {{"command": "status", "channels": ["{t}C", "{t}S"]}}}}
 
@@ -133,7 +128,7 @@ The SYSTEM marks Y-axis confirmed automatically — do NOT output any state upda
   Both not done: {{"message": "분석 결과, 현재 ADC: {t}C=<adc_c>, {t}S=<adc_s> (목표: <target>). HV 변경 제안: {t}C <old_c>V→<new_c>V, {t}S <old_s>V→<new_s>V. 적용하시겠습니까?", "update_state": {{"phase": "approving"}}}}
   Only C not done: {{"message": "분석 결과, 현재 ADC: {t}C=<adc_c> (목표: <target>). HV 변경 제안: {t}C <old_c>V→<new_c>V. ({t}S 완료) 적용하시겠습니까?", "update_state": {{"phase": "approving"}}}}
   Only S not done: {{"message": "분석 결과, 현재 ADC: {t}S=<adc_s> (목표: <target>). HV 변경 제안: {t}S <old_s>V→<new_s>V. ({t}C 완료) 적용하시겠습니까?", "update_state": {{"phase": "approving"}}}}
-  CRITICAL: Use EXACT values from state (last_suggested_hv_c/s, last_adc_c/s) — NEVER fabricate numbers.
+  CRITICAL: Copy the "현재→제안" arrow (e.g. C 775V→785V) EXACTLY from the state's "HV 변경 제안" line — keep the old→new order, do NOT swap the two numbers. Use EXACT ADC values (last_adc_c/s). NEVER fabricate numbers.
   If user requests manual HV adjustment (e.g. "C를 800으로", "S 10 올려줘"):
     Update suggested values via update_state and re-send approval message:
     {{"message": "...(updated approval)...", "update_state": {{"last_suggested_hv_c": <new_c>, "last_suggested_hv_s": <new_s>}}}}
@@ -155,7 +150,7 @@ After user says "완료":
 
 === CRITICAL RULES ===
 1. Follow steps STRICTLY in order. Do NOT skip Step 1e (Approval).
-2. Step 1a-i ALWAYS comes before 1a-ii.
+2. Step 1a ALWAYS comes before 1b.
 3. Output JSON ONLY. No natural language.
 4. NEVER include a done channel in channel_values.
 5. ALWAYS use EXACT numbers from state — never invent values.
@@ -173,12 +168,10 @@ After user says "완료":
         base = f"Phase: {phase} | Tower: {tower}"
 
         if self.state.get("last_hv_c") is None:
-            if not self.state.get("x_moved"):
-                return f"{base} | REQUIRED NEXT: motor_x_move_tool (step 1a-i)"
-            elif not self.state.get("y_confirmed"):
-                return f"{base} | REQUIRED NEXT: Y-axis move message (step 1a-ii)"
+            if not self.state.get("y_confirmed"):
+                return f"{base} | REQUIRED NEXT: position move message (step 1a)"
             else:
-                return f"{base} | REQUIRED NEXT: hv_execute_tool status (step 1b — Y-axis confirmed)"
+                return f"{base} | REQUIRED NEXT: hv_execute_tool status (step 1b — position confirmed)"
         elif adc_known and done_c and done_s:
             return f"{base} | CONVERGED → call hv_equalization_done_channel (step 1h)"
         elif adc_known and suggest_pending and phase == "approving":
@@ -202,12 +195,10 @@ After user says "완료":
         phase = self.state.get("phase", "idle")
 
         if self.state.get("last_hv_c") is None:
-            if not self.state.get("x_moved"):
-                lines.append(f"*** REQUIRED NEXT: motor_x_move_tool (step 1a-i) — auto-move X to {tower} ***")
-            elif not self.state.get("y_confirmed"):
-                lines.append(f"*** REQUIRED NEXT: Y-axis move message (step 1a-ii) — ask user to move Y to {tower} ***")
+            if not self.state.get("y_confirmed"):
+                lines.append(f"*** REQUIRED NEXT: position move message (step 1a) — ask user to move to {tower} position ***")
             else:
-                lines.append(f"*** REQUIRED NEXT: hv_execute_tool status (step 1b) — Y-axis confirmed, check HV now ***")
+                lines.append(f"*** REQUIRED NEXT: hv_execute_tool status (step 1b) — position confirmed, check HV now ***")
             lines.append("")
 
         if self.state.get("needs_plot_confirm"):
@@ -238,7 +229,7 @@ After user says "완료":
             lines.append("")
 
         lines.append(f"Phase: {phase}")
-        lines.append(f"Tower: {tower} (x:{self.state['tower_pos']['x']:.3f}, y:{self.state['tower_pos']['y']:.3f})  [X moved: {self.state.get('x_moved', False)}]")
+        lines.append(f"Tower: {tower} (x:{self.state['tower_pos']['x']:.3f}, y:{self.state['tower_pos']['y']:.3f})  [Position confirmed: {self.state.get('y_confirmed', False)}]")
         lines.append(f"Beam Energy: {self.state['beam_energy']} GeV")
         lines.append(f"Target Events: {self.state['target_events']}")
         lines.append(f"Target ADC: {self.state['target_adc_c']}")
@@ -247,9 +238,11 @@ After user says "완료":
         if self.state.get("last_suggested_hv_c") is not None:
             dc = self.state.get("channel_done_c", False)
             ds = self.state.get("channel_done_s", False)
-            c_str = f"C={self.state['last_suggested_hv_c']}V" + (" [DONE-skip]" if dc else "")
-            s_str = f"S={self.state['last_suggested_hv_s']}V" + (" [DONE-skip]" if ds else "")
-            lines.append(f"Suggested HV: {c_str}, {s_str}  <- use EXACT values in approval message")
+            oc, nc = self.state.get("last_hv_c"), self.state["last_suggested_hv_c"]
+            os_, ns = self.state.get("last_hv_s"), self.state["last_suggested_hv_s"]
+            c_str = "C 완료" if dc else f"C {oc:.0f}V→{nc}V"
+            s_str = "S 완료" if ds else f"S {os_:.0f}V→{ns}V"
+            lines.append(f"HV 변경 제안 (현재→제안, 이 화살표를 그대로 승인 메시지에 복사): {c_str}, {s_str}")
         if self.state.get("last_run_number"):
             lines.append(f"Last Run Number: {self.state['last_run_number']}")
         lines.append(f"Iterations: {self.state.get('iterations', 0)}")
@@ -293,19 +286,6 @@ After user says "완료":
         try:
             if tool_name == "none":
                 return "no_tool_executed"
-
-            elif tool_name == "motor_x_move_tool":
-                x = self._motor_x_for_current_step()
-                self.io.send_tool_output(f"[Motor] X축 이동 시작 ({self.tower}): {x:.3f} mm")
-                def _do_move():
-                    ok, msg = motor.move_x(x)
-                    if not ok:
-                        raise RuntimeError(msg)
-                    return msg
-                result = self._run_tool_with_retry(_do_move, "motor_x_move_tool")
-                self.io.send_tool_output(f"[Motor] {result}")
-                self.state["x_moved"] = True
-                return result
 
             elif tool_name == "daq_run_tool":
                 self._apply_daq_params_from_state(
@@ -422,7 +402,7 @@ After user says "완료":
     def _measure_adc(self, hv_c: float, hv_s: float, run_number: int) -> Tuple[Optional[float], Optional[float]]:
         """실제 run 데이터에서 (adc_c, adc_s) peakADC 측정.
         HV Equalization Sim agent는 이 메서드만 오버라이드해 ADC를 시뮬레이션한다.
-        나머지 워크플로우(suggest 계산/state 갱신/hv_execute/motor/daq)는 전부 공유."""
+        나머지 워크플로우(suggest 계산/state 갱신/hv_execute/daq)는 전부 공유."""
         from tools.hv_equalization_tool import calculate_valley_cut_average
         avg_c, _ = calculate_valley_cut_average(run_number, "C", self.tower)
         avg_s, _ = calculate_valley_cut_average(run_number, "S", self.tower)
@@ -488,7 +468,7 @@ After user says "완료":
             self.log(f"fitting summary 실패: {e}")
 
     def _extract_voltages(self, status_output: str) -> Tuple[Optional[float], Optional[float]]:
-        # 채널명은 타워별 (T1C/T1S … T9C/T9S). status 출력의 "(<name>) ... V0Set = <v>" 형식에서 추출.
+        # 채널명은 타워별 (M1T1C/M1T1S … M9T4C/M9T4S). status 출력의 "(<name>) ... V0Set = <v>" 형식에서 추출.
         t = re.escape(self.tower)
         match_c = re.search(rf"\({t}C\).*?V0Set\s*=\s*([\d.]+)", status_output, re.I)
         match_s = re.search(rf"\({t}S\).*?V0Set\s*=\s*([\d.]+)", status_output, re.I)
@@ -511,7 +491,7 @@ After user says "완료":
         "last_run_number",
         "iterations", "done",
         "needs_suggest",
-        "x_moved", "y_confirmed",  # 위치 확인은 코드 소유 (_on_user_input)
+        "y_confirmed",  # 위치 확인은 코드 소유 (_on_user_input)
     })
 
     def _update_state(self, updates: Dict[str, Any]):
@@ -532,12 +512,11 @@ After user says "완료":
         return bool(self.state.get("done"))
 
     def _on_user_input(self, user_input: str):
-        # Y축 이동 확인
-        if (self.state.get("x_moved")
-                and not self.state.get("y_confirmed")
+        # 이동 확인
+        if (not self.state.get("y_confirmed")
                 and self.state.get("last_hv_c") is None):
             self.state["y_confirmed"] = True
-            self.log("Y-axis confirmed by user")
+            self.log("Position confirmed by user")
             return
         # DAQ 후 plot 확인 → suggest 단계로 전환
         if self.state.get("needs_plot_confirm"):
@@ -546,8 +525,8 @@ After user says "완료":
             self.log("Plot confirmed → proceed to hv_equalization_suggest")
 
     def _guard_tool(self, tool_name: str, decision: Dict[str, Any]) -> Optional[str]:
-        # plot confirm 필요 시 DAQ/suggest/hv 차단 (motor/status는 허용)
-        if self.state.get("needs_plot_confirm") and tool_name not in ("motor_x_move_tool",):
+        # plot confirm 필요 시 DAQ/suggest/hv 차단
+        if self.state.get("needs_plot_confirm"):
             return (
                 f"needs_plot_confirm=True — send plot confirmation message first: "
                 f'{{"message": "{MSG_PLOT_CONFIRM}"}}'

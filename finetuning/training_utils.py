@@ -6,12 +6,14 @@
   - plot_loss_curve()        : loss 추세 이미지 생성 및 저장
 """
 
+import gc
 import json
 import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+import torch
 from transformers import TrainerCallback, TrainerControl, TrainerState, TrainingArguments
 
 
@@ -20,6 +22,32 @@ def setup_clean_logging() -> None:
     for lib in ("transformers", "datasets", "tokenizers", "accelerate", "peft",
                 "filelock", "fsspec", "huggingface_hub"):
         logging.getLogger(lib).setLevel(logging.WARNING)
+
+
+def _empty_device_cache() -> None:
+    """MPS/CUDA allocator가 캐시로 쥐고 있는 메모리를 OS로 회수한다."""
+    gc.collect()
+    if torch.backends.mps.is_available():
+        torch.mps.empty_cache()
+    elif torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+
+class MemoryCleanupCallback(TrainerCallback):
+    """
+    eval/save 직후 device 캐시를 비운다.
+
+    MPS(Apple Silicon)에서 eval이 할당한 메모리가 allocator 캐시에 남아
+    이후 학습이 메모리 압박으로 급격히 느려지는(스왑) 문제를 방지한다.
+    """
+
+    def on_evaluate(self, args: TrainingArguments, state: TrainerState,
+                    control: TrainerControl, **kwargs):
+        _empty_device_cache()
+
+    def on_save(self, args: TrainingArguments, state: TrainerState,
+                control: TrainerControl, **kwargs):
+        _empty_device_cache()
 
 
 # ──────────────────────────────────────────────────────────

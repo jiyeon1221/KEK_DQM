@@ -19,14 +19,12 @@ TOOL_LOCK_MAP = {
     "run_log": None,
     "hv_read": "hv",
     "hv_write": "hv",
-    "motor_move": None,
-    "motor_status": None,
-    "motor_alarm_reset": None,
-    "hodoscope_hv_read": None,
-    "hodoscope_hv_write": None,
 }
 
-TOOLS_NEED_CONFIRM = {"daq_run", "hv_write", "hodoscope_hv_write", "motor_move"}
+TOOLS_NEED_CONFIRM = {"daq_run", "hv_write"}
+
+# hv_write가 실제로 지원하는 command (모델이 "write" 등 엉뚱한 값을 내보낼 때 정규화용)
+_HV_WRITE_COMMANDS = {"voltage", "current", "svmax", "rup", "rdown", "name", "on", "off"}
 
 
 
@@ -39,36 +37,38 @@ Available tools:
   params: {"run_number": int, "method": "IntADC"|"PeakADC", "type": "full"|"heatmap"|"single", "modules": [list]}
   - type defaults to "full" (all towers + heatmap). No modules needed for full.
   - "heatmap": modules must be ["MCPPMT"]. method: IntADC or PeakADC.
-  - "single": modules is a list of channel names, e.g. ["T1-C"], ["T1-S","T1-C"], or ["T1"] (T1 auto-expands).
-  - method defaults to "IntADC". Use "PeakADC" only when explicitly requested.
+  - "single": modules is a list of channel names, e.g. ["M1-T1-C"], ["M1-T1-S","M1-T1-C"], or ["M1"] (M1 auto-expands).
+  - method has NO default. If the user does not say IntADC/적분 or PeakADC/피크, you MUST ask (tool:none) — never assume IntADC.
+  - run_number has NO default. Never invent one. If not given and no relative reference, ask (tool:none).
 - run_log: Google Sheets run log.
   Read:   params: {"command": "read", "run_num": int}
   Update: params: {"command": "update", "run_num": int, "<column>": "<value>"}
   Updatable columns: program, notes, config, beam_energy, beam_type, trigger_setup, hv_drc, hv_aux
-- hv_read: Read current HV status (CAEN HV + Hodoscope both). params: {"command": "status"}
-  Use for ANY HV status query including hodoscope queries.
+- hv_read: Read current CAEN HV status.
+  params: {"command": "status", "channels": <ch_spec>}
+  "channels" is OPTIONAL and accepts the SAME <ch_spec> forms as hv_write (see below).
+  - Omit "channels" (reads ALL channels) ONLY when there is no channel hint or the user says 전체/모든/all.
+  - If the user restricts to a subset (짝수/홀수/C채널/S채널/타워/특정 모듈·채널/슬롯 등),
+    put it in "channels" EXACTLY as you would for hv_write
+    (짝수→"even", 홀수→"odd", S채널/S만→"S", C채널/C만→"C", 타워 T1→"T1",
+     M3만→"M3", 특정 채널→["M3T2C"], 슬롯→"slot:12").
 - hv_write: Change CAEN HV voltage or turn channels on/off. User confirmation required.
   Voltage: {"command": "voltage", "channels": <ch_spec>, "voltage": <V as float>}
   On/off:  {"command": "on"|"off", "channels": <ch_spec>}
-  Valid channel names (ONLY these): T1C, T1S, T2C, T2S, T3C, T3S, T4C, T4S, T5C, T5S,
-    T6C, T6S, T7C, T7S, T8C, T8S, T9C, T9S, TRIG1, TRIG2, MCP-S, MCP-C
+  Valid channel names (ONLY these): M{1-9}T{1-4}{C,S} (e.g. M1T1C, M1T1S, M1T2C ... M9T4S), TRIG1, TRIG2, MCP-S, MCP-C
   Channel spec (<ch_spec>) options:
     "all"          — 전체 채널 (ONLY when user says 전체/모든/all)
+    "S" / "C"      — 모든 S(신틸)/C(체렌코프) 채널
+    "T1"~"T4"      — 타워 단위: 모든 모듈의 해당 타워 채널 (예: "T1")
+    "M5"           — 모듈 단위: M5의 모든 채널 (M5T1C/S~M5T4C/S, 8채널). M{1-9} 형식.
+    ["M3","M5"]    — 모듈 목록: 복수 모듈 지정 (각 모듈 8채널)
     "even"         — 짝수 번호 채널 전체
     "odd"          — 홀수 번호 채널 전체
     "N-M"          — ch 번호 N~M 범위 (예: "0-8", "2-12")
     "N,M,K"        — ch 번호 목록 (예: "1,2,5,6")
-    ["T1C","T2C"]  — 이름 목록
+    ["M1T1C","M1T2C"]  — 이름 목록
     "slot:S"       — 슬롯 S 전체
     "slot:S:even/odd" — 슬롯 S 짝/홀수
-- motor_move: Move X-axis motor to an absolute position. params: {"x": <mm>}
-  User confirmation required.
-- motor_status: Read current motor position. params: {}
-- motor_alarm_reset: Reset motor alarm/fault. params: {}
-- hodoscope_hv_read: Read hodoscope HV from set file. params: {"command": "read"}
-- hodoscope_hv_write: Change hodoscope HV. ONLY when user explicitly says "호도스코프"/"호도"/"hodoscope".
-  params: {"command": "write", "value": <V as float>}  (value: 0.0 to turn off)
-  User confirmation required.
 
 Current experiment state is provided so you can resolve relative references
 like "방금", "이번 런", "지금" to concrete run numbers or energies.
@@ -87,23 +87,23 @@ RULES:
 4. run_log supports both READ and WRITE:
    - VIEW/CHECK a log (확인, 보여줘, 읽어줘) WITHOUT a value → {"command": "read", "run_num": ...}
    - WRITE with column+value (e.g. "프로그램에 EM 추가") → {"command": "update", "run_num": ..., "<column>": "<value>"}
-5. hv_read for ANY HV status. "HV 확인", "HV 상태", "호도스코프 HV 확인" → all use hv_read.
+5. hv_read for ANY HV status. "HV 확인", "HV 상태" → all use hv_read.
+   If the request names a channel subset (짝수/홀수/C/S/타워/모듈/채널명/슬롯), pass it in "channels" just like hv_write;
+   otherwise omit "channels" to read ALL channels.
 6. DAQ requires an event count. If the user says "DAQ 돌려줘" without a number, ask how many events.
-7. Channel names like T1C, T1S, T2C, ..., T9S are HV channels — NOT log columns.
+7. Channel names like M1T1C, M1T1S, M2T3C, ... are HV channels (format: M{1-9}T{1-4}{C,S}) — NOT log columns.
    A SINGLE channel name + voltage → channels: [that single channel].
    ONLY use channels: "all" when the input explicitly says 전체/모든/전 채널/all channels.
-8. For daq_run, hv_write, motor_move, and hodoscope_hv_write, the system asks the user to confirm before execution.
+8. For daq_run and hv_write, the system asks the user to confirm before execution.
 9. "플롯", "그려줘", "그래프" → dqm_plot. Default type: full.
    Method: ONLY set it when the user explicitly says IntADC/intADC/적분 (→ "IntADC") or PeakADC/peakADC/피크 (→ "PeakADC").
    If method is not mentioned, respond with tool:none asking "IntADC로 그릴까요, PeakADC로 그릴까요?"
-10. Specific tower/channel (T1, T1-C, T1-S, T5 etc.) → type: single, modules: [name].
+10. Specific tower/channel (M1, M1-T1-C, M1-T1-S, M5 etc.) → type: single, modules: [name].
 11. "heatmap" or "MCPPMT" mentioned → type: heatmap, modules: ["MCPPMT"].
-12. dqm_plot requires run_number. Infer from state (last completed run) if not specified.
-    If truly unknown, ask which run number.
-13. motor_move — always absolute. Extract target position in mm.
-14. hodoscope_hv_write: ONLY when user explicitly says "호도스코프"/"호도"/"hodoscope".
-    "꺼줘" / "off" → value: 0.0
-15. hv_write: for all other HV write requests (not hodoscope).
+12. dqm_plot requires run_number. NEVER invent or guess a run number.
+    Only resolve it from state when the user uses a relative reference (방금/이번/지금/현재/마지막/최근/last).
+    If the user gives NO explicit run number AND NO relative reference,
+    respond tool:none asking "어떤 런 번호의 DQM 플롯을 그릴까요?".
 """
 
 
@@ -129,6 +129,9 @@ class BrainAgent(BaseAgent):
         self.confirm_queue = confirm_queue or queue.Queue()
         self.clarify_queue = clarify_queue or queue.Queue()
         self._last_daq_run: Optional[int] = None  # run number from last brain-initiated DAQ
+        # 누락 파라미터를 물어본 뒤, 사용자의 답변을 "그 필드의 값"으로 채우기 위한 대기 상태.
+        # {"tool": str, "params": dict, "reason": str}
+        self._pending: Optional[Dict[str, Any]] = None
 
     def _get_system_prompt(self) -> str:
         return SYSTEM_PROMPT
@@ -159,6 +162,18 @@ class BrainAgent(BaseAgent):
         pass
 
     def handle_request(self, user_input: str, io: WebSocketIO) -> None:
+        # ── 직전 턴에서 누락 파라미터를 물어봤다면, 이번 입력을 그 답으로 채운다.
+        #    (모델을 다시 태워 이미 준 정보를 또 묻는 것을 방지) ──
+        if self._pending is not None:
+            resumed = self._resume_pending(user_input)
+            if resumed is not None:
+                tool_name, params, reason = resumed
+                self.add_to_history("user", user_input)
+                self._dispatch(tool_name, params, reason, io)
+                return
+            # 답이 해당 필드로 해석되지 않으면 → 새 요청으로 간주하고 정상 처리
+            self._pending = None
+
         context = self.build_full_context(current_input=user_input)
 
         io.send_status("BrainAgent 처리 중...")
@@ -193,6 +208,10 @@ class BrainAgent(BaseAgent):
 
         params = decision.get("params", {})
 
+        # HV command / channels 정규화 + 사용자 입력에서 누락 인자 backfill
+        self._normalize_hv_params(tool_name, params)
+        self._backfill_params(tool_name, params, user_input)
+
         # "방금"/"이번"/"last"/"지금" → infer run_number from state instead of asking
         if tool_name == "dqm_plot" and not params.get("run_number"):
             if re.search(r'(방금|이번|last|지금)', user_input.lower()):
@@ -202,12 +221,19 @@ class BrainAgent(BaseAgent):
                 if run_num:
                     params["run_number"] = int(run_num)
 
+        self._dispatch(tool_name, params, reason, io)
+
+    def _dispatch(self, tool_name: str, params: dict, reason: str, io: WebSocketIO) -> None:
+        """검증 → (필요 시)확인 → 잠금 → 실행. 누락 인자는 _pending에 저장 후 되묻는다."""
         missing = self._validate_params(tool_name, params)
         if missing:
-            _, question = missing
+            field, question = missing
+            self._pending = {"tool": tool_name, "params": params, "reason": reason}
             io.output_queue.put({"type": "adhoc_clarify", "question": question, "source": "brain"})
             io.send_status("대기 중")
             return
+
+        self._pending = None  # 모든 인자 충족 → 대기 상태 해제
 
         if tool_name in TOOLS_NEED_CONFIRM:
             preview = self._format_confirm_preview(tool_name, params)
@@ -251,6 +277,128 @@ class BrainAgent(BaseAgent):
 
         io.send_status("대기 중")
 
+    # ── 파라미터 정규화 / backfill / 클래리파이 재개 ──
+
+    @staticmethod
+    def _normalize_hv_params(tool_name: str, params: dict) -> None:
+        """모델이 tool 이름(read/write)을 command로 잘못 넣거나, 시스템 프롬프트의
+        예시 문구("모든 S 채널" 등)를 그대로 복사한 경우를 바로잡는다."""
+        if tool_name in ("hv_read", "hv_status"):
+            params["command"] = "status"
+        elif tool_name == "hv_write":
+            cmd = str(params.get("command", "")).lower()
+            if cmd not in _HV_WRITE_COMMANDS:
+                # "write"/"" 등 → 전압/전류 값이 있으면 voltage, 아니면 그대로 둠
+                if "voltage" in params or "value" in params:
+                    params["command"] = "voltage"
+                elif "current" in params:
+                    params["command"] = "current"
+
+        # channels가 프롬프트 예시 문구를 그대로 복사한 한국어 문자열이면 토큰으로 치환
+        ch = params.get("channels")
+        if isinstance(ch, str):
+            low = ch.strip().lower()
+            if "s 채널" in low or "s채널" in low or "s 만" in low or low in ("s만", "s"):
+                params["channels"] = "S"
+            elif "c 채널" in low or "c채널" in low or low in ("c만", "c"):
+                params["channels"] = "C"
+            elif "짝수" in low or low == "even":
+                params["channels"] = "even"
+            elif "홀수" in low or low == "odd":
+                params["channels"] = "odd"
+
+    def _backfill_params(self, tool_name: str, params: dict, user_input: str) -> None:
+        """모델이 놓친 인자를 사용자 입력 원문에서 직접 복구한다 (지어내지 않음)."""
+        if tool_name == "dqm_plot":
+            if not params.get("run_number"):
+                rn = self._extract_run_number_from_text(user_input)
+                if rn:
+                    params["run_number"] = rn
+            if not params.get("method"):
+                m = self._extract_method_from_text(user_input)
+                if m:
+                    params["method"] = m
+        elif tool_name == "daq_run":
+            if not params.get("events"):
+                ev = self._extract_events_from_text(user_input)
+                if ev:
+                    params["events"] = ev
+
+    def _resume_pending(self, user_input: str):
+        """대기 중인 누락 필드를 이번 입력으로 채운다.
+        성공 시 (tool, params, reason) 반환, 해석 불가면 None."""
+        pend = self._pending
+        tool_name = pend["tool"]
+        params = dict(pend["params"])
+        filled = False
+
+        missing = self._validate_params(tool_name, params)
+        if not missing:
+            self._pending = None
+            return tool_name, params, pend.get("reason", "")
+        field, _ = missing
+
+        if field in ("run_number", "run_num"):
+            rn = self._extract_run_number_from_text(user_input)
+            if rn:
+                params[field] = rn
+                filled = True
+        elif field == "method":
+            m = self._extract_method_from_text(user_input)
+            if m:
+                params["method"] = m
+                filled = True
+        elif field == "events":
+            ev = self._extract_events_from_text(user_input)
+            if ev:
+                params["events"] = ev
+                filled = True
+        elif field == "modules":
+            mods = self._extract_modules_from_text(user_input)
+            if mods:
+                params["modules"] = mods
+                filled = True
+
+        if not filled:
+            return None
+        self._pending = {"tool": tool_name, "params": params, "reason": pend.get("reason", "")}
+        return tool_name, params, pend.get("reason", "")
+
+    @staticmethod
+    def _extract_run_number_from_text(text: str) -> Optional[int]:
+        m = re.search(r'(?:run|런|번)\s*(\d{3,})', text, re.IGNORECASE)
+        if not m:
+            m = re.search(r'(\d{4,})', text)  # 단독 4자리 이상 숫자
+        return int(m.group(1)) if m else None
+
+    @staticmethod
+    def _extract_method_from_text(text: str) -> Optional[str]:
+        t = text.lower()
+        if re.search(r'peak|피크', t):
+            return "PeakADC"
+        if re.search(r'int|적분|integral', t):
+            return "IntADC"
+        return None
+
+    @staticmethod
+    def _extract_events_from_text(text: str) -> Optional[int]:
+        m = re.search(r'(\d+)\s*(k|천|만)?', text, re.IGNORECASE)
+        if not m:
+            return None
+        n = int(m.group(1))
+        unit = (m.group(2) or "").lower()
+        if unit == "k" or unit == "천":
+            n *= 1000
+        elif unit == "만":
+            n *= 10000
+        return n if n > 0 else None
+
+    @staticmethod
+    def _extract_modules_from_text(text: str) -> list:
+        # M1-T1-C / M1T1S / M3 등
+        mods = re.findall(r'M\d(?:-?T\d)?(?:-?[CS])?', text, re.IGNORECASE)
+        return [m.upper() for m in mods] if mods else []
+
     @staticmethod
     def _format_dispatch_msg(tool_name: str, params: dict, reason: str) -> str:
         lines = [f"Tool: {tool_name}"]
@@ -280,18 +428,6 @@ class BrainAgent(BaseAgent):
                 return f"HV 켜기\n  채널: {ch_str}"
             if cmd == "off":
                 return f"HV 끄기\n  채널: {ch_str}"
-        if tool_name == "hodoscope_hv_write":
-            cmd = params.get("command", "write")
-            v = params.get("value", "?")
-            try:
-                if float(v) == 0.0:
-                    return "Hodoscope HV 끄기\n  value: 0.0 V (off)"
-            except (ValueError, TypeError):
-                pass
-            return f"Hodoscope HV 변경\n  value: {v} V"
-        if tool_name == "motor_move":
-            x = params.get("x", "?")
-            return f"X축 이동\n  목표 위치: {x} mm"
         return f"{tool_name}\n  params: {params}"
 
     @staticmethod
@@ -306,13 +442,10 @@ class BrainAgent(BaseAgent):
             if not params.get("method"):
                 return ("method", "IntADC로 그릴까요, PeakADC로 그릴까요?")
             if params.get("type") == "single" and not params.get("modules"):
-                return ("modules", "어떤 채널을 그릴까요? (예: T1, T1-C, T1-S)")
+                return ("modules", "어떤 채널을 그릴까요? (예: M1, M1-T1-C, M1-T1-S)")
         if tool_name == "run_log":
             if not params.get("run_num"):
                 return ("run_num", "어떤 런 번호의 로그를 처리할까요?")
-        if tool_name == "motor_move":
-            if params.get("x") is None:
-                return ("x", "X축 목표 위치를 mm 단위로 알려주세요. (예: 100mm로 이동)")
         return None
 
     def _apply_fallback_rules(self, user_input: str) -> Optional[dict]:
@@ -407,54 +540,16 @@ class BrainAgent(BaseAgent):
 
                 elif tool_name in ("hv_read", "hv_status"):
                     from tools.hv_control_tool import HVControlTool
-                    from tools.hodoscope_hv_tool import HodoscopeHVTool
-                    params.setdefault("command", "status")
-                    result_caen = HVControlTool().execute(params)
-                    try:
-                        result_hodo = HodoscopeHVTool().execute({"command": "read"})
-                    except Exception as e:
-                        result_hodo = f"[Hodoscope HV 읽기 실패: {e}]"
-                    io.send_tool_output(result_caen + "\n\n─────────────────────\n" + result_hodo)
+                    # hv_read는 항상 status. 모델이 "read"/"write" 등 엉뚱한 command를
+                    # 내보내도 무조건 status로 강제한다.
+                    params["command"] = "status"
+                    result = HVControlTool().execute(params)
+                    io.send_tool_output(result)
 
                 elif tool_name == "hv_write":
                     from tools.hv_control_tool import HVControlTool
                     io.send_status("HV 변경 중...")
                     result = HVControlTool().execute(params)
-                    io.send_tool_output(result)
-
-                elif tool_name == "motor_move":
-                    from tools.motor_control_tool import move_x
-                    x = float(params.get("x", 0))
-                    io.send_status(f"[Motor] 절대 이동: {x:.3f} mm")
-                    ok, msg = move_x(x)
-                    if not ok:
-                        raise RuntimeError(msg)
-                    io.send_tool_output(f"[Motor] {msg}")
-
-                elif tool_name == "motor_status":
-                    from tools.motor_control_tool import get_position
-                    ok, msg = get_position()
-                    if not ok:
-                        raise RuntimeError(msg)
-                    io.send_tool_output(f"[Motor] 현재 위치: {msg}")
-
-                elif tool_name == "motor_alarm_reset":
-                    from tools.motor_control_tool import alarm_reset
-                    io.send_status("모터 알람 리셋 중...")
-                    ok, msg = alarm_reset()
-                    if not ok:
-                        raise RuntimeError(msg)
-                    io.send_tool_output(f"[Motor] {msg}")
-
-                elif tool_name == "hodoscope_hv_read":
-                    from tools.hodoscope_hv_tool import HodoscopeHVTool
-                    result = HodoscopeHVTool().execute({"command": "read"})
-                    io.send_tool_output(result)
-
-                elif tool_name == "hodoscope_hv_write":
-                    from tools.hodoscope_hv_tool import HodoscopeHVTool
-                    io.send_status("Hodoscope HV 변경 중...")
-                    result = HodoscopeHVTool().execute(params)
                     io.send_tool_output(result)
 
                 else:

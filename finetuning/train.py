@@ -7,7 +7,7 @@ AutoTB 통합 Fine-tuning 스크립트
   python finetuning/train.py all      [옵션]   # 모든 agent 순차 학습
 
 agent 목록:
-  brain | calibration | energy_scan | hv_equalization
+  brain | calibration | energy_scan | hv_equalization | position_scan
 
 옵션 (모두 선택 사항):
   --epochs   INT    학습 epoch 수
@@ -31,6 +31,7 @@ import dataclasses
 import hashlib
 import json
 import logging
+import math
 import re
 import sys
 import torch
@@ -55,7 +56,12 @@ sys.path.insert(0, str(PROJECT_ROOT))   # config.py 접근
 sys.path.insert(0, str(FINETUNING_DIR)) # training_utils.py 직접 접근
 
 from config import AGENT_MODELS
-from training_utils import EpochLossCallback, plot_loss_curve, setup_clean_logging
+from training_utils import (
+    EpochLossCallback,
+    MemoryCleanupCallback,
+    plot_loss_curve,
+    setup_clean_logging,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -65,6 +71,10 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 MAX_LENGTH = 2048   # 시퀀스 최대 토큰 길이 (truncation 기준)
+
+# eval/save 간격: 0.25 epoch마다 (epoch당 4회). eval_steps는 데이터셋 크기에서
+# 자동 계산되므로 agent/데이터가 바뀌어도 "0.25 epoch마다" 빈도가 유지된다.
+EVAL_EVERY_EPOCH_FRAC = 0.25
 
 
 # ──────────────────────────────────────────────────────────
@@ -92,6 +102,15 @@ AGENT_DEFAULTS: dict[str, dict] = {
     },
     "hv_equalization": {
         "data_file": "hv_equalization_data.json",
+        "epochs":    3,
+        "lora_r":    16,
+        "lora_alpha":32,
+        "lr":        2e-4,
+        "batch":     4,
+        "grad_acc":  8,
+    },
+    "position_scan": {
+        "data_file": "position_scan_data.json",
         "epochs":    3,
         "lora_r":    16,
         "lora_alpha":32,
@@ -372,22 +391,36 @@ def finetune(agent_key: str, cfg: dict) -> None:
     total     = sum(p.numel() for p in model.parameters())
     logger.info(f"  LoRA params: {trainable:,} / {total:,} ({100*trainable/total:.2f}%)")
 
-    # 6. Training args
-    #    eval/save: epoch 기반 (step 기반이면 데이터셋 크기에 따라 eval이 안 될 수 있음)
+    # 6. eval/save 간격을 0.25 epoch(= epoch당 4회)로 계산.
+    #    optimizer step 수 = ceil(#샘플 / batch) // grad_acc  (HF 계산 방식과 동일)
+    batches_per_epoch = math.ceil(len(tokenized["train"]) / cfg["batch"])
+    steps_per_epoch   = max(1, batches_per_epoch // cfg["grad_acc"])
+    total_steps       = steps_per_epoch * cfg["epochs"]
+    #    eval/save는 epoch마다. eval_steps는 train loss logging 간격 계산에만 사용.
+    eval_steps        = max(1, round(steps_per_epoch * EVAL_EVERY_EPOCH_FRAC))
+    logger.info(
+        f"  Eval/save 간격: epoch마다 (총 {cfg['epochs']}회 / {total_steps} steps)"
+    )
+
+    # 7. Training args
+    #    eval/save는 step 기반 — eval_steps를 데이터셋 크기에서 계산하므로
+    #    데이터가 작아도 eval이 반드시 여러 번 수행된다.
+    #    load_best_model_at_end=True는 save/eval strategy가 같아야 하고
+    #    save_steps가 eval_steps의 배수여야 함 → save_steps=eval_steps로 맞춤.
     training_args = TrainingArguments(
         output_dir=output_dir,
         num_train_epochs=cfg["epochs"],
         per_device_train_batch_size=cfg["batch"],
-        per_device_eval_batch_size=2,
+        per_device_eval_batch_size=4,   # eval은 backward가 없어 train보다 크게 잡아 속도 개선
         gradient_accumulation_steps=cfg["grad_acc"],
         learning_rate=cfg["lr"],
         lr_scheduler_type="cosine",
         warmup_ratio=0.1,
         weight_decay=0.01,
         max_grad_norm=1.0,
-        logging_steps=10,
-        eval_strategy="epoch",        # epoch 끝마다 eval
-        save_strategy="epoch",        # epoch 끝마다 저장
+        logging_steps=max(1, eval_steps // 2),  # eval보다 촘촘하게 train loss 기록
+        eval_strategy="epoch",        # epoch마다 eval
+        save_strategy="epoch",        # epoch마다 저장
         save_total_limit=2,
         load_best_model_at_end=True,
         metric_for_best_model="eval_loss",
@@ -402,11 +435,11 @@ def finetune(agent_key: str, cfg: dict) -> None:
         bf16=(device != "cpu"),       # CPU는 bf16 미지원
     )
 
-    # 7. Callback + Collator
+    # 8. Callback + Collator
     loss_callback = EpochLossCallback(agent_name=agent_key, log_dir=log_dir)
     collator      = WeightedCollator(tokenizer=tokenizer, pad_to_multiple_of=8)
 
-    # 8. Trainer
+    # 9. Trainer
     ts      = datetime.now().strftime("%Y%m%d_%H%M%S")
     trainer = WeightedLossTrainer(
         decision_weight=cfg["decision_weight"],
@@ -416,20 +449,20 @@ def finetune(agent_key: str, cfg: dict) -> None:
         eval_dataset=tokenized["test"],
         data_collator=collator,
         processing_class=tokenizer,
-        callbacks=[loss_callback],
+        callbacks=[loss_callback, MemoryCleanupCallback()],
     )
 
-    # 9. Train
+    # 10. Train
     trainer.train()
 
-    # 10. Loss curve 이미지 저장
+    # 11. Loss curve 이미지 저장
     plot_loss_curve(
         log_history=trainer.state.log_history,
         output_path=log_dir / f"{agent_key}_{ts}_loss.png",
         title=f"{label} — Loss Curve",
     )
 
-    # 11. 모델 저장 (LoRA adapter + merged full model)
+    # 12. 모델 저장 (LoRA adapter + merged full model)
     lora_out  = Path(output_dir) / "final_lora"
     final_out = Path(output_dir) / "final"
     model.save_pretrained(str(lora_out))

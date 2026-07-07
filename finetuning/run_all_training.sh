@@ -65,7 +65,7 @@ PIPELINE_START=$(date +%s)
 if [ $# -gt 0 ]; then
     AGENTS=("$@")
 else
-    AGENTS=(calibration energy_scan hv_equalization brain)
+    AGENTS=(calibration energy_scan hv_equalization position_scan brain)
 fi
 
 # ── Data generation ───────────────────────────────────────────
@@ -74,6 +74,7 @@ get_data_gen_script() {
         calibration)     echo "$SCRIPT_DIR/calib_data_gen.py" ;;
         energy_scan)     echo "$SCRIPT_DIR/EM_data_gen.py" ;;
         hv_equalization) echo "$SCRIPT_DIR/hv_equalization_data_gen.py" ;;
+        position_scan)   echo "$SCRIPT_DIR/position_scan_data_gen.py" ;;
         brain)           echo "$SCRIPT_DIR/brain_data_gen.py" ;;
         *)               echo "" ;;
     esac

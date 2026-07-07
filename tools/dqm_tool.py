@@ -36,8 +36,8 @@ class DQMPlotTool(BaseTool):
     
     @staticmethod
     def _normalize_module(name: str) -> str:
-        """T1S → T1-S, T3C → T3-C. Leaves T1, MCPPMT, T1-S unchanged."""
-        return re.sub(r'^(T\d)([SC])$', r'\1-\2', name)
+        """M1T1S → M1-T1-S, M3T2C → M3-T2-C. Leaves M1, MCPPMT, M1-T1-S unchanged."""
+        return re.sub(r'^(M\d)(T\d)([SC])$', r'\1-\2-\3', name)
 
     def execute(self, params: Dict[str, Any]) -> str:
         """

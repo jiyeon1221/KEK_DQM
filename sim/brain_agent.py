@@ -40,13 +40,13 @@ class BrainAgentSim(BrainAgent):
                 io.send_tool_output(result)
 
             elif tool_name in ("hv_read", "hv_status"):
-                params.setdefault("command", "status")
+                params["command"] = "status"
                 result = sim.hv_status(params.get("channels"))
                 io.send_tool_output(result)
 
             elif tool_name == "hv_write":
                 io.send_status("HV 변경 중... [SIM]")
-                cmd = params.get("command", "status")
+                cmd = params.get("command", "voltage")
                 if cmd == "voltage":
                     ch = params.get("channels")
                     voltage = float(params.get("voltage", 0))
@@ -57,30 +57,6 @@ class BrainAgentSim(BrainAgent):
                         result = sim.hv_voltage(cv)
                 else:
                     result = sim.hv_on_off(cmd, params.get("channels", []))
-                io.send_tool_output(result)
-
-            elif tool_name == "motor_move":
-                x = float(params.get("x", 0))
-                io.send_status(f"[Motor] 절대 이동: {x:.3f} mm [SIM]")
-                result = sim.motor_move(x)
-                io.send_tool_output(result)
-
-            elif tool_name == "motor_status":
-                result = sim.motor_status()
-                io.send_tool_output(result)
-
-            elif tool_name == "motor_alarm_reset":
-                io.send_status("모터 알람 리셋 중... [SIM]")
-                result = sim.motor_alarm_reset()
-                io.send_tool_output(result)
-
-            elif tool_name == "hodoscope_hv_read":
-                result = sim.hodoscope_hv_read()
-                io.send_tool_output(result)
-
-            elif tool_name == "hodoscope_hv_write":
-                io.send_status("Hodoscope HV 변경 중... [SIM]")
-                result = sim.hodoscope_hv_write(float(params.get("value", 0)))
                 io.send_tool_output(result)
 
             else:

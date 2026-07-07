@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>autoTB Control Panel</title>
-  <link rel="stylesheet" href="/static/style.css?v=20260619a" />
+  <link rel="stylesheet" href="/static/style.css?v=20260629b" />
 </head>
 <body>
 <div id="app">
@@ -19,6 +19,8 @@
     <button class="agent-btn" id="btn-calib" onclick="startAgent('calib_scan')">Calibration</button>
     <button class="agent-btn" id="btn-hv"    onclick="startAgent('hv_equalization')">HV Equalization</button>
     <button class="agent-btn" id="btn-hv-sim" onclick="startAgent('hv_equalization_sim')">HV Sim</button>
+    <button class="agent-btn" id="btn-pos"   onclick="startAgent('position_scan')">Position Scan</button>
+    <button class="agent-btn" id="btn-pos-sim" onclick="startAgent('position_scan_sim')">Position Sim</button>
     <button class="agent-btn" id="stop-btn"  onclick="stopAgent()" style="display:none">Stop Agent</button>
     <button class="agent-btn" id="kill-btn"  onclick="killRun()">KILL RUN</button>
     <button class="agent-btn" id="hv-check-btn" title="전체 채널 HV 상태 확인">HV Check</button>
@@ -72,13 +74,46 @@
           </div>
         </div>
         <div id="dqm-cells"></div>
-        <div id="motor-pos-bar">Motor: --</div>
       </div>
 
     </div>
 
   </div><!-- /panels -->
 </div><!-- /app -->
+
+<!-- Tower Picker Modal -->
+<div id="tower-picker-overlay">
+  <div id="tower-picker-panel">
+    <div id="tower-picker-header">
+      <span id="tower-picker-title">타워 선택</span>
+      <span id="tower-picker-hint"></span>
+      <span id="tower-picker-close" onclick="closeTowerPicker()">✕</span>
+    </div>
+    <div id="tower-grid"></div>
+    <div id="pos-options" style="display:none;">
+      <div class="pos-opt-group">
+        <span class="pos-opt-label">스캔 방향</span>
+        <div class="pos-opt-btns">
+          <button class="pos-opt-btn" data-kind="direction" data-value="horizontal" onclick="selectPosOption('direction','horizontal')">Horizontal</button>
+          <button class="pos-opt-btn" data-kind="direction" data-value="vertical" onclick="selectPosOption('direction','vertical')">Vertical</button>
+          <button class="pos-opt-btn" data-kind="direction" data-value="both" onclick="selectPosOption('direction','both')">Both</button>
+        </div>
+      </div>
+      <div class="pos-opt-group">
+        <span class="pos-opt-label">peakADC 채널</span>
+        <div class="pos-opt-btns">
+          <button class="pos-opt-btn" data-kind="channel" data-value="C" onclick="selectPosOption('channel','C')">C</button>
+          <button class="pos-opt-btn" data-kind="channel" data-value="S" onclick="selectPosOption('channel','S')">S</button>
+        </div>
+      </div>
+    </div>
+    <div id="tower-picker-footer">
+      <span id="tower-picker-count">0개 선택됨</span>
+      <button id="tower-picker-clear" onclick="clearTowerSelection()">전체 해제</button>
+      <button id="tower-picker-confirm" onclick="confirmTowerPicker()" disabled>확인</button>
+    </div>
+  </div>
+</div>
 
 <!-- Clarify popup -->
 <div id="clarify-overlay" onclick="closeClarify()">
@@ -136,6 +171,6 @@
 </div>
 
 <script src="/jsroot/jsroot.js"></script>
-<script src="/static/app.js?v=20260622a"></script>
+<script src="/static/app.js?v=20260629b"></script>
 </body>
 </html>

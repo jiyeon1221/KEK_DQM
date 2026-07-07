@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Calibration Scan Agent — 모든 타워(T1-T9)를 돌며 데이터 수집 자동화"""
+"""Calibration Scan Agent — 모든 타워(M1T1-M9T4)를 돌며 데이터 수집 자동화"""
 
 import json
 import sys
@@ -8,7 +8,6 @@ from pathlib import Path
 from datetime import datetime
 
 from tools.daq_tool import DAQRunTool
-import tools.motor_control_tool as motor
 
 from .base_agent import BaseAgent
 sys.path.append(str(Path(__file__).parent.parent))
@@ -47,7 +46,20 @@ class CalibScanAgent(BaseAgent):
         self.daq_tool = DAQRunTool()
 
         # 타워 순서는 agent_runner에서 전달 — fallback으로 기본 지그재그 사용
-        self.tower_order = tower_order if tower_order is not None else ["T1", "T2", "T3", "T6", "T5", "T4", "T7", "T8", "T9"]
+        self.tower_order = tower_order if tower_order is not None else [
+            # Row 0, L→R
+            "M1T1", "M1T2", "M2T1", "M2T2", "M3T1", "M3T2",
+            # Row 1, R→L
+            "M3T4", "M3T3", "M2T4", "M2T3", "M1T4", "M1T3",
+            # Row 2, L→R
+            "M4T1", "M4T2", "M5T1", "M5T2", "M6T1", "M6T2",
+            # Row 3, R→L
+            "M6T4", "M6T3", "M5T4", "M5T3", "M4T4", "M4T3",
+            # Row 4, L→R
+            "M7T1", "M7T2", "M8T1", "M8T2", "M9T1", "M9T2",
+            # Row 5, R→L
+            "M9T4", "M9T3", "M8T4", "M8T3", "M7T4", "M7T3",
+        ]
         
         # Calibration은 rot=0, tilt=0 고정
         self.tower_positions = {}
@@ -75,7 +87,6 @@ class CalibScanAgent(BaseAgent):
                     "runs": [],
                     "completed": False,
                     "completed_at": None,
-                    "x_moved": False,
                     "y_confirmed": False,
                 }
                 for tower in self.tower_order
@@ -103,18 +114,15 @@ Follow these steps EXACTLY:
 - After event count is provided: Update 'target_events' and set phase to 'idle'.
   Output: {"tool": "none", "update_state": {"target_events": <number>, "phase": "idle"}}
 
-=== STEP 1: For Each Tower in tower_order (REPEAT for T1-T9) ===
+=== STEP 1: For Each Tower in tower_order (REPEAT for all 36 towers (M1T1..M9T4)) ===
 Repeat steps 1a-1c for each tower in tower_order until all towers are completed.
 
-1a-i. Move X-axis automatically (no user input needed):
-  Output: {"tool": "motor_x_move_tool", "params": {"x": <x from state>}}
-
-1a-ii. After motor tool completes, ask user to move Y-axis manually:
-  Output: {"message": "X축 자동 이동 완료 (<x> mm). Y축을 <y>으로 이동해주세요."}
+1a. Ask user to move to the tower position:
+  Output: {"message": "x = <x> mm, y = <y> mm 으로 이동해주세요."}
   (Replace <x>, <y> with the CURRENT tower's position from state)
 
-After user says "완료" to the Y-axis message:
-The SYSTEM marks Y-axis confirmed automatically — you do NOT output any state update.
+After user says "완료":
+The SYSTEM marks position confirmed automatically — you do NOT output any state update.
 Just proceed to STEP 1b (the step hint will say "daq_run_tool").
 
 1b. Execute DAQ
@@ -134,15 +142,15 @@ Output: {"message": "데이터 수집 및 Plot 생성이 완료되었습니다. 
 
 After user says "완료" to the plot message:
 The SYSTEM marks the current tower completed and advances to the next tower automatically — you do NOT output any state update.
-Proceed to the next tower's STEP 1a-i (or, if all done, the SYSTEM ends the session).
+Proceed to the next tower's STEP 1a (or, if all done, the SYSTEM ends the session).
 
 === STEP 2: Completion ===
 When ALL towers are completed, the SYSTEM sends the completion message and ends the session automatically.
 
 === CRITICAL RULES ===
 1. Follow steps STRICTLY in order. Do NOT skip or reorder steps.
-2. Step 1a-i ALWAYS comes before 1a-ii for every tower.
-3. The SYSTEM (not you) owns all bookkeeping: x_moved, y_confirmed, tower "completed", current_tower_idx, and session termination. NEVER output update_state for these — only the step hint tells you the next action.
+2. Step 1a (position move message) ALWAYS comes before 1b (DAQ) for every tower.
+3. The SYSTEM (not you) owns all bookkeeping: y_confirmed, tower "completed", current_tower_idx, and session termination. NEVER output update_state for these — only the step hint tells you the next action.
 4. Output JSON format (CHOOSE ONE, NEVER BOTH "tool" and "message"):
    - {"tool": "...", "params": {...}}        (tool execution)
    - {"message": "..."}                        (user message)
@@ -170,7 +178,7 @@ When ALL towers are completed, the SYSTEM sends the completion message and ends 
                         "REQUIRED NEXT: parse it and output "
                         "{\"message\": \"이벤트를 몇개 받을까요?\", \"update_state\": {\"beam_energy\": <number>, \"phase\": \"config_events\"}}. "
                         "DO NOT ask for energy again.")
-            return "Phase: config | REQUIRED NEXT: ask user for beam energy (STEP 0). Do NOT call motor tool yet."
+            return "Phase: config | REQUIRED NEXT: ask user for beam energy (STEP 0). Do NOT call any tool yet."
         if self.state.get("target_events") is None:
             if _last_user:
                 return (f"Phase: config_events | beam_energy={self.state['beam_energy']} | "
@@ -179,7 +187,7 @@ When ALL towers are completed, the SYSTEM sends the completion message and ends 
                         "{\"tool\": \"none\", \"update_state\": {\"target_events\": <number>, \"phase\": \"idle\"}}. "
                         "DO NOT ask for event count again.")
             return (f"Phase: config_events | beam_energy={self.state['beam_energy']} | "
-                    "REQUIRED NEXT: ask user for event count (STEP 0). Do NOT call motor tool yet.")
+                    "REQUIRED NEXT: ask user for event count (STEP 0). Do NOT call any tool yet.")
 
         # STEP 1+: config 끝난 경우만 진입
         tower_idx = self.state.get("current_tower_idx", 0)
@@ -187,18 +195,17 @@ When ALL towers are completed, the SYSTEM sends the completion message and ends 
         if tower_idx < total:
             tower = self.tower_order[tower_idx]
             status = self.state["tower_status"].get(tower, {})
-            if not status.get("x_moved"):
-                return f"Phase: {phase} | Tower: {tower} ({tower_idx+1}/{total}) | REQUIRED NEXT: motor_x_move_tool (step 1a-i)"
-            elif not status.get("y_confirmed"):
-                # Y축 확인은 사용자 '완료' 시 코드가 처리. 모델은 Y 이동 메시지만 출력.
-                return f"Phase: {phase} | Tower: {tower} ({tower_idx+1}/{total}) | REQUIRED NEXT: Y-axis move message (step 1a-ii)"
+            if not status.get("y_confirmed"):
+                pos = self.tower_positions.get(tower, {})
+                return (f"Phase: {phase} | Tower: {tower} ({tower_idx+1}/{total}) | "
+                        f"REQUIRED NEXT: position move message (step 1a, x={pos.get('x',0):.3f}, y={pos.get('y',0):.3f})")
             elif not status.get("runs"):
                 return f"Phase: {phase} | Tower: {tower} ({tower_idx+1}/{total}) | REQUIRED NEXT: daq_run_tool (step 1b)"
             elif self.state.get("needs_plot_confirm"):
                 last_run = status["runs"][-1]
                 return (f"Phase: {phase} | Tower: {tower} ({tower_idx+1}/{total}) | "
                         f"DAQ done (Run {last_run}) — REQUIRED NEXT: plot confirmation message (step 1c). "
-                        f"DO NOT call daq_run_tool or motor_x_move_tool. 완료 시 시스템이 자동으로 완료 처리한다.")
+                        f"DO NOT call daq_run_tool. 완료 시 시스템이 자동으로 완료 처리한다.")
             # runs exist + needs_plot_confirm=False → should already be completed; guard prevents loops
             return (f"Phase: {phase} | Tower: {tower} ({tower_idx+1}/{total}) | "
                     f"needs_plot_confirm=False — DO NOT call any tool or send plot confirmation.")
@@ -228,14 +235,14 @@ When ALL towers are completed, the SYSTEM sends the completion message and ends 
             if key == "tower_status" and isinstance(value, dict):
                 for t, v in value.items():
                     if t in self.state["tower_status"]:
-                        # completed/runs/collected_events/x_moved/y_confirmed는 코드 소유.
+                        # completed/runs/collected_events/y_confirmed는 코드 소유.
                         # 완료 표시는 _on_user_input(plot 확인)에서만 일어난다.
                         safe_v = {
                             k: val for k, val in v.items()
                             if k not in ("completed", "completed_at", "runs",
-                                         "collected_events", "x_moved", "y_confirmed")
+                                         "collected_events", "y_confirmed")
                         }
-                        if any(k in v for k in ("completed", "y_confirmed", "x_moved")):
+                        if any(k in v for k in ("completed", "y_confirmed")):
                             self.log(f"WARNING: LLM tried to set code-owned field on {t} — rejected")
                         self.state["tower_status"][t].update(safe_v)
                         self.log(f"State updated: tower_status[{t}] = {safe_v}")
@@ -264,20 +271,6 @@ When ALL towers are completed, the SYSTEM sends the completion message and ends 
         """Tool 실행"""
         if tool_name == "none":
             return "no_tool_executed"
-
-        elif tool_name == "motor_x_move_tool":
-            tower = self._current_tower_name()
-            x = self._motor_x_for_current_step()
-            self.io.send_tool_output(f"[Motor] X축 이동 시작 ({tower}): {x:.3f} mm")
-            def _do_move():
-                ok, msg = motor.move_x(x)
-                if not ok:
-                    raise RuntimeError(msg)
-                return msg
-            result = self._run_tool_with_retry(_do_move, "motor_x_move_tool")
-            self.io.send_tool_output(f"[Motor] {result}")
-            self.state["tower_status"][tower]["x_moved"] = True
-            return result
 
         elif tool_name == "daq_run_tool":
             tower = self._current_tower_name()
@@ -321,17 +314,26 @@ When ALL towers are completed, the SYSTEM sends the completion message and ends 
             return None
         tower = self.tower_order[idx]
         st = self.state["tower_status"].get(tower, {})
-        # 2. motor 이미 완료된 타워에 재호출 차단
-        if tool_name == "motor_x_move_tool" and st.get("x_moved"):
-            return f"{tower} X-axis already moved. Send Y-axis move message. {self._get_step_hint()}"
-        # 3. Y축 미확인 시 DAQ 차단
+        # 2. 위치 미확인 시 DAQ 차단
         if tool_name == "daq_run_tool" and not st.get("y_confirmed"):
-            return f"{tower} Y-axis not confirmed. Send Y-axis move message first. {self._get_step_hint()}"
+            return f"{tower} 위치 미확인. 위치 이동 메시지를 먼저 보내세요. {self._get_step_hint()}"
         return None
 
     def _guard_ai_message(self, message: str) -> Optional[str]:
         if MSG_PLOT_CONFIRM in message and not self.state.get("needs_plot_confirm"):
             return f"needs_plot_confirm=False — DO NOT send plot confirmation. {self._get_step_hint()}"
+        # 위치 확인이 끝났고 아직 DAQ 전이면 유일한 유효 동작은 daq_run_tool 호출이다.
+        # base 모델이 위치 이동 메시지를 한 번 더 내보내는 것(중복 질문)을 차단한다.
+        idx = self.state.get("current_tower_idx", 0)
+        if idx < len(self.tower_order):
+            tower = self.tower_order[idx]
+            st = self.state["tower_status"].get(tower, {})
+            if (self.state.get("beam_energy") is not None
+                    and self.state.get("target_events") is not None
+                    and st.get("y_confirmed") and not st.get("runs")
+                    and not self.state.get("needs_plot_confirm")):
+                return (f"{tower} 위치 확인 완료 — 메시지를 보내지 말고 daq_run_tool을 호출하세요. "
+                        f"{self._get_step_hint()}")
         return None
 
     def _format_progress(self) -> str:
@@ -390,15 +392,20 @@ When ALL towers are completed, the SYSTEM sends the completion message and ends 
         return self._format_progress()
 
     def _on_user_input(self, user_input: str):
+        # STEP 0 config 중에는 코드가 소유한 부킹(y_confirmed/plot)이 없다.
+        # 이 가드가 없으면 에너지·이벤트 응답("3","1000")이 첫 타워의
+        # y_confirmed=True로 잘못 소비되어 첫 타워 위치 이동을 건너뛴다.
+        if self.state.get("beam_energy") is None or self.state.get("target_events") is None:
+            return
         idx = self.state.get("current_tower_idx", 0)
         if idx >= len(self.tower_order):
             return
         tower = self.tower_order[idx]
         st = self.state["tower_status"][tower]
-        # 1) Y축 이동 확인 → 코드가 직접 처리
-        if st.get("x_moved") and not st.get("y_confirmed"):
+        # 1) 이동 확인 → 코드가 직접 처리
+        if not st.get("y_confirmed"):
             st["y_confirmed"] = True
-            self.log(f"{tower} Y-axis confirmed by user")
+            self.log(f"{tower} 이동 완료 확인")
             return
         # 2) DAQ 후 plot 확인 → 현재 타워 완료 처리 (코드가 소유)
         if self.state.get("needs_plot_confirm"):
@@ -461,9 +468,8 @@ When ALL towers are completed, the SYSTEM sends the completion message and ends 
             if status['completed']:
                 lines.append(f"  ✅ {tower} (x:{pos['x']:.3f}, y:{pos['y']:.3f}): Completed (Runs: {status['runs']})")
             elif i == self.state['current_tower_idx']:
-                x_tag = " [X moved]" if status.get("x_moved") else ""
-                y_tag = " [Y confirmed - proceed to DAQ]" if status.get("y_confirmed") else ""
-                lines.append(f"  ➡️  {tower} (x:{pos['x']:.3f}, y:{pos['y']:.3f}): Pending{x_tag}{y_tag}  <- CURRENT (target: {self.state['target_events']} events)")
+                pos_tag = " [Position confirmed - proceed to DAQ]" if status.get("y_confirmed") else ""
+                lines.append(f"  ➡️  {tower} (x:{pos['x']:.3f}, y:{pos['y']:.3f}): Pending{pos_tag}  <- CURRENT (target: {self.state['target_events']} events)")
             else:
                 lines.append(f"     {tower} (x:{pos['x']:.3f}, y:{pos['y']:.3f}): Pending")
         return "\n".join(lines)

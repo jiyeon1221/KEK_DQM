@@ -1050,16 +1050,6 @@ async def api_live_log(since: int = 0):
     return {"lines": new_lines, "total": total}
 
 
-@app.get("/api/motor/position")
-async def api_motor_position():
-    """현재 모터 X축 위치를 반환 (azd_kren --pos). DQM 패널 하단 실시간 표시용."""
-    try:
-        from tools.motor_control_tool import get_position
-        ok, pos = await asyncio.get_event_loop().run_in_executor(None, get_position)
-        return {"ok": ok, "position": pos}
-    except Exception as e:
-        return {"ok": False, "position": f"Error: {e}"}
-
 
 # ── WebSocket ─────────────────────────────────────────────────────────────────
 @app.websocket("/ws")

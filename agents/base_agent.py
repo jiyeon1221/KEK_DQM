@@ -155,8 +155,6 @@ class BaseAgent(ABC):
                             ch = params.get("channels", "")
                             v = params.get("voltage") or params.get("value", "")
                             summary += f" cmd={cmd} ch={ch}" + (f" v={v}" if v != "" else "")
-                        if tool == "motor_move" and params.get("x") is not None:
-                            summary += f" x={params['x']}mm"
                         if "update_state" in decision:
                             summary += f" (Update State: {list(decision['update_state'].keys())})"
                         content = summary
@@ -265,15 +263,6 @@ class BaseAgent(ABC):
     def _position_for_current_step(self) -> Optional[Dict[str, float]]:
         return None
 
-    def _motor_x_for_current_step(self) -> float:
-        pos = self._position_for_current_step()
-        if pos is None:
-            raise RuntimeError(f"[{self.agent_name}] _position_for_current_step() not implemented")
-        return self._motor_x_from_state(pos["x"])
-
-    def _motor_x_from_state(self, x_mm: float) -> float:
-        return float(x_mm)
-
     def _apply_daq_params_from_state(
         self,
         params: Dict[str, Any],
@@ -368,6 +357,11 @@ class BaseAgent(ABC):
         """거부 사유 반환 → 출력 차단 후 재시도. None이면 통과."""
         return None
 
+    def _stop_requested(self) -> bool:
+        """WebSocketIO의 stop_event가 set이면 True (TerminalIO는 항상 False)."""
+        ev = getattr(self.io, "stop_event", None)
+        return ev is not None and ev.is_set()
+
     def run(self):
         self._print_banner()
         self.log(f"{self.agent_name} 시작")
@@ -377,9 +371,26 @@ class BaseAgent(ABC):
 
         _error_count = 0
         _MAX_ERRORS = 3
+        # 워치독: 사용자 상호작용(message)도 없고 실제 tool 실행도 없이
+        # update_state만 반복하면(예: config에서 beam_energy=null 무한 반복)
+        # get_input()을 절대 호출하지 않아 stop_event도 못 보고 무한 루프에 빠진다.
+        _no_progress = 0
+        _MAX_NO_PROGRESS = 5
+        # 워치독2: guard(_guard_ai_message/_guard_tool)가 같은 결정을 계속 거부하면
+        # get_input()이 호출되지 않아 state가 진전되지 않고, greedy 디코딩이 거부된
+        # 출력(예: plot 확인 메시지)을 무한 반복한다. 실제 진행(메시지 전송/tool 실행/
+        # 사용자 입력)이 있을 때 0으로 리셋되고, 연속 거부만 누적되면 종료한다.
+        _guard_reject = 0
+        _MAX_GUARD_REJECT = 6
 
         while True:
             try:
+                # get_input()이 호출되지 않는 경로(아래 update_state-only 등)에서도
+                # Stop 버튼(stop_event)에 반응해 깨끗이 빠져나가도록 매 반복 확인.
+                if self._stop_requested():
+                    self.log("Stop 요청 감지 — 종료합니다.")
+                    break
+
                 self._pre_iteration()
 
                 if self._is_complete():
@@ -421,7 +432,17 @@ class BaseAgent(ABC):
                         self.log(f"message guard blocked: {rejection}")
                         self.add_to_history("assistant", json.dumps(decision, ensure_ascii=False))
                         self.add_to_history("user", rejection)
+                        _guard_reject += 1
+                        if _guard_reject >= _MAX_GUARD_REJECT:
+                            self.log(f"Guard-reject 워치독 발동 ({_guard_reject}회 연속 거부) — 종료")
+                            self.io.send_ai_message(
+                                "에이전트가 올바른 다음 단계를 내지 못하고 같은 응답을 반복하고 있습니다. "
+                                "세션을 종료합니다. 다시 시작해주세요."
+                            )
+                            break
                         continue
+                    _guard_reject = 0
+                    _no_progress = 0
                     self.io.send_ai_message(message)
                     self.add_to_history("assistant", json.dumps(decision, ensure_ascii=False))
                     user_input = self.io.get_input()
@@ -442,7 +463,17 @@ class BaseAgent(ABC):
                     if rejection:
                         self.add_to_history("assistant", json.dumps(decision, ensure_ascii=False))
                         self.add_to_history("user", rejection)
+                        _guard_reject += 1
+                        if _guard_reject >= _MAX_GUARD_REJECT:
+                            self.log(f"Guard-reject 워치독 발동 ({_guard_reject}회 연속 거부) — 종료")
+                            self.io.send_ai_message(
+                                "에이전트가 올바른 다음 단계를 내지 못하고 같은 응답을 반복하고 있습니다. "
+                                "세션을 종료합니다. 다시 시작해주세요."
+                            )
+                            break
                         continue
+                    _guard_reject = 0
+                    _no_progress = 0
                     result = self._execute_tool(tool_name, decision.get("params", {}))
                     self.add_to_history("assistant", json.dumps(decision, ensure_ascii=False))
                     if self.state.get("done"):
@@ -450,7 +481,19 @@ class BaseAgent(ABC):
                     continue
 
                 if "update_state" in decision:
+                    # message도 tool도 없이 update_state만 오는 턴. 정상 워크플로우에선
+                    # config 파싱(target_events→idle) 직후 딱 1번 나오고 곧바로 message
+                    # 턴으로 이어진다. 이게 연속으로 반복되면(모델이 config를 못 내보내는
+                    # 경우) 사용자 입력 없이 무한 루프 → 워치독으로 차단.
                     self.add_to_history("assistant", json.dumps(decision, ensure_ascii=False))
+                    _no_progress += 1
+                    if _no_progress >= _MAX_NO_PROGRESS:
+                        self.log(f"No-progress 워치독 발동 ({_no_progress}회 연속 update_state-only) — 종료")
+                        self.io.send_ai_message(
+                            "에이전트가 다음 단계를 진행하지 못하고 있습니다. 세션을 종료합니다. "
+                            "다시 시작해주세요."
+                        )
+                        break
                     continue
 
                 _error_count += 1
@@ -463,6 +506,11 @@ class BaseAgent(ABC):
             except KeyboardInterrupt:
                 break
             except Exception as e:
+                # get_input()/wait_for_retry()가 Stop 요청 시 던지는 StopAgentException
+                # 등, stop_event가 켜진 상태의 예외는 정상 종료로 처리(트레이스백 X).
+                if self._stop_requested():
+                    self.log("Stop 요청 감지 — 종료합니다.")
+                    break
                 print(f"\n❌ 오류 발생: {str(e)}")
                 import traceback as _tb
                 _tb.print_exc()

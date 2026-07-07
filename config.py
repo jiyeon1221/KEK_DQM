@@ -32,6 +32,13 @@ AGENT_MODELS = {
         "description": "HV Equalization Agent (HV 조정)"
     },
 
+    "position_scan": {
+        "base_model": "Qwen/Qwen2.5-1.5B-Instruct",
+        "fine_tuned_path": str(MODELS_DIR / "position_scan_agent" / "final"),
+        "memory_mb": 3000,
+        "description": "Position Scan Agent (타워 경계/센터 스캔)"
+    },
+
     "brain": {
         "base_model": "Qwen/Qwen2.5-1.5B-Instruct",
         "fine_tuned_path": str(MODELS_DIR / "brain_agent" / "final"),

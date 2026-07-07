@@ -3,7 +3,7 @@
 Training data generator for BrainAgent
 - Single-turn: state + user request  →  tool call JSON
 - Covers all tool types × expression variety × state combinations
-- Target: daq_run 150, dqm_plot 600+250+170, run_log 150+70, hv_read 190, hv_write 240, motor_move 70, hodoscope_write 45, none 150
+- Target: daq_run 150, dqm_plot 600+250+170, run_log 150+70, hv_read 190, hv_write 240, hodoscope_write 45, none 150
 - hodoscope_hv_read merged into hv_read (hv_read now shows CAEN HV + Hodoscope combined)
 """
 
@@ -22,36 +22,38 @@ Available tools:
   params: {"run_number": int, "method": "IntADC"|"PeakADC", "type": "full"|"heatmap"|"single", "modules": [list]}
   - type defaults to "full" (all towers + heatmap). No modules needed for full.
   - "heatmap": modules must be ["MCPPMT"]. method: IntADC or PeakADC.
-  - "single": modules is a list of channel names, e.g. ["T1-C"], ["T1-S","T1-C"], or ["T1"] (T1 auto-expands).
-  - method defaults to "IntADC". Use "PeakADC" only when explicitly requested.
+  - "single": modules is a list of channel names, e.g. ["M1-T1-C"], ["M1-T1-S","M1-T1-C"], or ["M1"] (M1 auto-expands).
+  - method has NO default. If the user does not say IntADC/적분 or PeakADC/피크, you MUST ask (tool:none) — never assume IntADC.
+  - run_number has NO default. Never invent one. If not given and no relative reference, ask (tool:none).
 - run_log: Google Sheets run log.
   Read:   params: {"command": "read", "run_num": int}
   Update: params: {"command": "update", "run_num": int, "<column>": "<value>"}
   Updatable columns: program, notes, config, beam_energy, beam_type, trigger_setup, hv_drc, hv_aux
-- hv_read: Read current HV status (CAEN HV + Hodoscope both). params: {"command": "status"}
-  Use for ANY HV status query including hodoscope queries.
+- hv_read: Read current CAEN HV status.
+  params: {"command": "status", "channels": <ch_spec>}
+  "channels" is OPTIONAL and accepts the SAME <ch_spec> forms as hv_write (see below).
+  - Omit "channels" (reads ALL channels) ONLY when there is no channel hint or the user says 전체/모든/all.
+  - If the user restricts to a subset (짝수/홀수/C채널/S채널/타워/특정 모듈·채널/슬롯 등),
+    put it in "channels" EXACTLY as you would for hv_write
+    (짝수→"even", 홀수→"odd", S채널/S만→"S", C채널/C만→"C", 타워 T1→"T1",
+     M3만→"M3", 특정 채널→["M3T2C"], 슬롯→"slot:12").
 - hv_write: Change CAEN HV voltage or turn channels on/off. User confirmation required.
   Voltage: {"command": "voltage", "channels": <ch_spec>, "voltage": <V as float>}
   On/off:  {"command": "on"|"off", "channels": <ch_spec>}
-  Valid channel names (ONLY these): T1C, T1S, T2C, T2S, T3C, T3S, T4C, T4S, T5C, T5S,
-    T6C, T6S, T7C, T7S, T8C, T8S, T9C, T9S, TRIG1, TRIG2, MCP-S, MCP-C
+  Valid channel names (ONLY these): M{1-9}T{1-4}{C,S} (e.g. M1T1C, M1T1S, M1T2C ... M9T4S), TRIG1, TRIG2, MCP-S, MCP-C
   Channel spec (<ch_spec>) options:
     "all"          — 전체 채널 (ONLY when user says 전체/모든/all)
+    "S" / "C"      — 모든 S(신틸)/C(체렌코프) 채널
+    "T1"~"T4"      — 타워 단위: 모든 모듈의 해당 타워 채널 (예: "T1")
+    "M5"           — 모듈 단위: M5의 모든 채널 (M5T1C/S~M5T4C/S, 8채널). M{1-9} 형식.
+    ["M3","M5"]    — 모듈 목록: 복수 모듈 지정 (각 모듈 8채널)
     "even"         — 짝수 번호 채널 전체
     "odd"          — 홀수 번호 채널 전체
     "N-M"          — ch 번호 N~M 범위 (예: "0-8", "2-12")
     "N,M,K"        — ch 번호 목록 (예: "1,2,5,6")
-    ["T1C","T2C"]  — 이름 목록
+    ["M1T1C","M1T2C"]  — 이름 목록
     "slot:S"       — 슬롯 S 전체
     "slot:S:even/odd" — 슬롯 S 짝/홀수
-- motor_move: Move X-axis motor to an absolute position. params: {"x": <mm>}
-  User confirmation required.
-- motor_status: Read current motor position. params: {}
-- motor_alarm_reset: Reset motor alarm/fault. params: {}
-- hodoscope_hv_read: Read hodoscope HV from set file. params: {"command": "read"}
-- hodoscope_hv_write: Change hodoscope HV. ONLY when user explicitly says "호도스코프"/"호도"/"hodoscope".
-  params: {"command": "write", "value": <V as float>}  (value: 0.0 to turn off)
-  User confirmation required.
 
 Current experiment state is provided so you can resolve relative references
 like "방금", "이번 런", "지금" to concrete run numbers or energies.
@@ -70,23 +72,23 @@ RULES:
 4. run_log supports both READ and WRITE:
    - VIEW/CHECK a log (확인, 보여줘, 읽어줘) WITHOUT a value → {"command": "read", "run_num": ...}
    - WRITE with column+value (e.g. "프로그램에 EM 추가") → {"command": "update", "run_num": ..., "<column>": "<value>"}
-5. hv_read for ANY HV status. "HV 확인", "HV 상태", "호도스코프 HV 확인" → all use hv_read.
+5. hv_read for ANY HV status. "HV 확인", "HV 상태" → all use hv_read.
+   If the request names a channel subset (짝수/홀수/C/S/타워/모듈/채널명/슬롯), pass it in "channels" just like hv_write;
+   otherwise omit "channels" to read ALL channels.
 6. DAQ requires an event count. If the user says "DAQ 돌려줘" without a number, ask how many events.
-7. Channel names like T1C, T1S, T2C, ..., T9S are HV channels — NOT log columns.
+7. Channel names like M1T1C, M1T1S, M2T3C, ... are HV channels (format: M{1-9}T{1-4}{C,S}) — NOT log columns.
    A SINGLE channel name + voltage → channels: [that single channel].
    ONLY use channels: "all" when the input explicitly says 전체/모든/전 채널/all channels.
-8. For daq_run, hv_write, motor_move, and hodoscope_hv_write, the system asks the user to confirm before execution.
+8. For daq_run and hv_write, the system asks the user to confirm before execution.
 9. "플롯", "그려줘", "그래프" → dqm_plot. Default type: full.
    Method: ONLY set it when the user explicitly says IntADC/intADC/적분 (→ "IntADC") or PeakADC/peakADC/피크 (→ "PeakADC").
    If method is not mentioned, respond with tool:none asking "IntADC로 그릴까요, PeakADC로 그릴까요?"
-10. Specific tower/channel (T1, T1-C, T1-S, T5 etc.) → type: single, modules: [name].
+10. Specific tower/channel (M1, M1-T1-C, M1-T1-S, M5 etc.) → type: single, modules: [name].
 11. "heatmap" or "MCPPMT" mentioned → type: heatmap, modules: ["MCPPMT"].
-12. dqm_plot requires run_number. Infer from state (last completed run) if not specified.
-    If truly unknown, ask which run number.
-13. motor_move — always absolute. Extract target position in mm.
-14. hodoscope_hv_write: ONLY when user explicitly says "호도스코프"/"호도"/"hodoscope".
-    "꺼줘" / "off" → value: 0.0
-15. hv_write: for all other HV write requests (not hodoscope).
+12. dqm_plot requires run_number. NEVER invent or guess a run number.
+    Only resolve it from state when the user uses a relative reference (방금/이번/지금/현재/마지막/최근/last).
+    If the user gives NO explicit run number AND NO relative reference,
+    respond tool:none asking "어떤 런 번호의 DQM 플롯을 그릴까요?".
 """
 
 
@@ -150,7 +152,9 @@ def _random_energy():
     return random.choice([1, 2, 3, 4, 5, 10, 20, 30, 40, 50, 60, 80, 100, 120])
 
 def _random_tower():
-    return random.choice(["T1", "T2", "T3", "T4", "T5", "T6", "T7", "T8", "T9"])
+    m = random.randint(1, 9)
+    t = random.randint(1, 4)
+    return f"M{m}T{t}"
 
 def _random_events():
     # 1000 ~ 500000 범위, 실험에서 쓰는 현실적인 값
@@ -243,17 +247,18 @@ def gen_daq_run() -> List[dict]:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _random_channel():
-    tower = random.randint(1, 9)
+    m = random.randint(1, 9)
+    t = random.randint(1, 4)
     side = random.choice(["-C", "-S"])
-    return f"T{tower}{side}"
+    return f"M{m}-T{t}{side}"
 
 
 def _nondash(ch: str) -> str:
-    """'T1-S' → 'T1S', 'T3-C' → 'T3C'. Leaves 'T1' or 'MCPPMT' unchanged."""
+    """'M1-T1-S' → 'M1T1S'. Leaves 'M1' or 'MCPPMT' unchanged."""
     return ch.replace("-", "")
 
 def _random_tower_name():
-    return f"T{random.randint(1, 9)}"
+    return f"M{random.randint(1, 9)}"
 
 def _random_single_modules():
     """Return a realistic modules list for single type."""
@@ -266,8 +271,9 @@ def _random_single_modules():
         return [_random_tower_name()]
     elif choice < 0.8:
         # scintillator + Cherenkov of same tower
-        t = random.randint(1, 9)
-        return [f"T{t}-S", f"T{t}-C"]
+        m = random.randint(1, 9)
+        t = random.randint(1, 4)
+        return [f"M{m}-T{t}-S", f"M{m}-T{t}-C"]
     else:
         # two different channels
         return [_random_channel(), _random_channel()]
@@ -535,7 +541,7 @@ def gen_dqm_plot() -> List[dict]:
     for _ in range(100):
         run = _random_run()
         modules = _random_single_modules()
-        ch_str = " ".join(modules)   # e.g. "T1-C" or "T1" or "T3-S T3-C"
+        ch_str = " ".join(modules)   # e.g. "M1-T1-C" or "M1" or "M1-T3-S M1-T3-C"
         tmpl = random.choice(single_intadc_tmpl)
         examples.append(make_example(
             _make_state(random.random() > 0.3),
@@ -558,6 +564,41 @@ def gen_dqm_plot() -> List[dict]:
              "params": {"run_number": run, "method": "PeakADC",
                         "type": "single", "modules": modules},
              "reason": f"Run {run} single PeakADC ({ch_str}) DQM 플랏 생성"},
+        ))
+
+    # ── E. NO run number AND NO relative reference → ask run number (100) ──────
+    # 런 번호도 없고 방금/이번/지금 같은 상대 참조도 없으면 임의 번호를 지어내지 말고 물어봐야 함.
+    # state에 current_run이 있어도, 상대 참조 없이는 절대 state의 런을 끌어오지 않는다.
+    ask_run_nomethod_tmpl = [
+        "그려줘", "플랏 보여줘", "그래프 그려줘", "DQM 그려줘", "플롯",
+        "플랏 그려줘", "그래프 보여줘", "DQM 보여줘", "플랏 뽑아줘",
+        "그림 그려줘", "plot 그려줘", "draw", "plot", "DQM plot",
+        "히스토그램 그려줘", "그려", "플랏좀", "그래프 좀 그려줘",
+        "DQM 플랏 그려줘", "플랏 하나 그려줘",
+    ]
+    for _ in range(60):
+        tmpl = random.choice(ask_run_nomethod_tmpl)
+        examples.append(make_example(
+            _make_state(random.random() > 0.3),
+            tmpl,
+            {"tool": "none", "message": "어떤 런 번호의 DQM 플롯을 그릴까요?"},
+        ))
+
+    # method는 주어졌지만 여전히 run 번호/상대 참조가 없으면 → 먼저 run 번호를 물어봄
+    ask_run_withmethod_tmpl = [
+        "intADC 그려줘", "적분 ADC 그려줘", "intADC 보여줘", "적분 그려줘",
+        "int adc 플랏", "integral 그려줘", "intADC plot", "draw intadc",
+        "plot intadc", "적분 플랏 그려줘",
+        "peakADC 그려줘", "피크 그려줘", "peakADC 보여줘", "peak ADC 그려줘",
+        "피크 ADC 플랏", "peakADC plot", "피크만 그려줘", "draw peakadc",
+        "heatmap 그려줘", "히트맵 보여줘", "MCPPMT heatmap 그려줘", "히트맵 그려줘",
+    ]
+    for _ in range(40):
+        tmpl = random.choice(ask_run_withmethod_tmpl)
+        examples.append(make_example(
+            _make_state(random.random() > 0.3),
+            tmpl,
+            {"tool": "none", "message": "어떤 런 번호의 DQM 플롯을 그릴까요?"},
         ))
 
     return examples
@@ -786,8 +827,8 @@ def gen_hv_read() -> List[dict]:
     ]
     named_channels = [
         "TRIG1", "TRIG2", "MCP-S", "MCP-C",
-        "T1C", "T1S", "T2C", "T2S", "T3C", "T3S",
-        "T4C", "T5C", "T5S", "T6C", "T7S", "T8C", "T9C", "T9S",
+        "M1T1C", "M1T1S", "M2T2C", "M3T3S",
+        "M4T1C", "M5T2S", "M6T3C", "M7T4S", "M8T1C", "M9T4S",
     ]
     for _ in range(30):
         ch = random.choice(named_channels)
@@ -795,8 +836,66 @@ def gen_hv_read() -> List[dict]:
         state = _make_state(random.random() > 0.3)
         examples.append(make_example(state, tmpl.format(ch=ch), {
             "tool": "hv_read",
-            "params": {"command": "status"},
+            "params": {"command": "status", "channels": [ch]},
             "reason": f"{ch} 채널 HV 상태 읽기",
+        }))
+
+    # ── 부분 채널 상태 조회: 짝수/홀수/S채널/C채널 (80 samples) ──
+    # hv_write와 동일한 <ch_spec> 사용 (even/odd, S만→ALL_S 목록, C만→ALL_C 목록)
+    _all_s = "S"
+    _all_c = "C"
+    subset_read_tmpl = [
+        "{grp} HV 확인해줘", "{grp} 전압 얼마야", "{grp} HV 상태",
+        "{grp} 전압 확인", "{grp} HV 읽어줘", "{grp} hv status",
+        "{grp} 상태 확인", "{grp} HV 보여줘", "{grp} 전압 상태 알려줘",
+        "{grp} 지금 전압 얼마야", "{grp} hv 확인", "{grp} 전압 읽어줘",
+    ]
+    subset_read_specs = [
+        (["짝수 채널", "짝수 ch", "even 채널", "짝수만", "even channel", "짝수 번호 채널"], "even", "짝수 채널"),
+        (["홀수 채널", "홀수 ch", "odd 채널", "홀수만", "odd channel", "홀수 번호 채널"], "odd", "홀수 채널"),
+        (["S채널", "S만", "S쪽", "S side", "scintillator 채널", "모든 S채널", "S 채널"], _all_s, "S채널"),
+        (["C채널", "C만", "C쪽", "C side", "cherenkov 채널", "체렌코프 채널", "모든 C채널", "C 채널"], _all_c, "C채널"),
+    ]
+    for _ in range(80):
+        names, ch_spec, reason_prefix = random.choice(subset_read_specs)
+        grp = random.choice(names)
+        tmpl = random.choice(subset_read_tmpl)
+        state = _make_state(random.random() > 0.3)
+        examples.append(make_example(state, tmpl.format(grp=grp), {
+            "tool": "hv_read",
+            "params": {"command": "status", "channels": ch_spec},
+            "reason": f"{reason_prefix} HV 상태 읽기",
+        }))
+
+    # ── 모듈 단위 상태 조회 (M3만 등, 40 samples) ──
+    module_read_tmpl = [
+        "{m} HV 확인해줘", "{m} 전압 얼마야", "{m} HV 상태", "{m} HV 읽어줘",
+        "{m}만 HV 확인", "{m} 채널 전압 확인", "{m} hv status", "{m} 전압 상태 보여줘",
+        "{m} 모듈 HV 확인", "{m}만 상태 확인", "{m} hv 보여줘", "{m} 전압 확인해줘",
+    ]
+    for _ in range(40):
+        m = f"M{random.randint(1, 9)}"
+        tmpl = random.choice(module_read_tmpl)
+        state = _make_state(random.random() > 0.3)
+        examples.append(make_example(state, tmpl.format(m=m), {
+            "tool": "hv_read",
+            "params": {"command": "status", "channels": m},
+            "reason": f"{m} 모듈 HV 상태 읽기",
+        }))
+
+    # ── 슬롯 단위 상태 조회 (20 samples) ──
+    slot_read_tmpl = [
+        "슬롯 {s} HV 확인해줘", "슬롯 {s} 전압 얼마야", "slot {s} HV 상태",
+        "슬롯 {s} HV 읽어줘", "슬롯 {s} 채널 상태 확인", "slot {s} 전압 확인",
+    ]
+    for _ in range(20):
+        s = random.choice([11, 12])
+        tmpl = random.choice(slot_read_tmpl)
+        state = _make_state(random.random() > 0.3)
+        examples.append(make_example(state, tmpl.format(s=s), {
+            "tool": "hv_read",
+            "params": {"command": "status", "channels": f"slot:{s}"},
+            "reason": f"슬롯 {s} HV 상태 읽기",
         }))
 
     return examples
@@ -816,8 +915,7 @@ def gen_hv_write() -> List[dict]:
     """HV write requests — voltage change, on/off. BrainAgent will confirm before executing."""
     examples = []
 
-    channels = ["T1C", "T1S", "T2C", "T2S", "T3C", "T3S", "T4C", "T4S",
-                "T5C", "T5S", "T6C", "T6S", "T7C", "T7S", "T8C", "T8S", "T9C", "T9S"]
+    channels = [f"M{m}T{t}{s}" for m in range(1, 10) for t in range(1, 5) for s in ("C", "S")]
     # 800~1800V 범위 포함, V 있는 것과 없는 것 혼용
     voltages_with_v  = ["100V", "200V", "500V", "800V", "850V", "900V", "1000V",
                         "1200V", "1400V", "1450V", "1500V", "1550V", "1600V",
@@ -926,14 +1024,14 @@ def gen_hv_write() -> List[dict]:
         "{ch} HV 얼마로 설정되어있어", "{ch} 고전압 얼마야",
     ]
     named_channels_for_read = ["TRIG1", "TRIG2", "MCP-S", "MCP-C",
-                                "T1C", "T1S", "T5C", "T5S", "T9C", "T9S"]
+                                "M1T1C", "M1T1S", "M5T2C", "M5T2S", "M9T4C", "M9T4S"]
     for _ in range(30):
         ch = random.choice(named_channels_for_read)
         tmpl = random.choice(named_ch_read_tmpl)
         state = _make_state(random.random() > 0.3)
         examples.append(make_example(state, tmpl.format(ch=ch), {
             "tool": "hv_read",
-            "params": {"command": "status"},
+            "params": {"command": "status", "channels": [ch]},
             "reason": f"{ch} 채널 HV 상태 읽기",
         }))
 
@@ -985,7 +1083,7 @@ def gen_hv_write() -> List[dict]:
     ]
     single_onoff_channels = [
         "TRIG1", "TRIG2", "MCP-S", "MCP-C",
-        "T1C", "T2S", "T5C", "T7S",
+        "M1T1C", "M2T2S", "M5T3C", "M7T4S",
     ]
     for _ in range(15):
         ch = random.choice(single_onoff_channels)
@@ -1013,8 +1111,8 @@ def gen_hv_write() -> List[dict]:
 #  HV WRITE ADVANCED — S만/C만/짝수/홀수/ch범위/Trig/MCP 채널 그룹 (240 samples)
 # ══════════════════════════════════════════════════════════════════════════════
 
-ALL_S = ["T1S", "T2S", "T3S", "T4S", "T5S", "T6S", "T7S", "T8S", "T9S"]
-ALL_C = ["T1C", "T2C", "T3C", "T4C", "T5C", "T6C", "T7C", "T8C", "T9C"]
+ALL_S = "S"
+ALL_C = "C"
 EVEN_CH = "even"
 ODD_CH  = "odd"
 
@@ -1291,7 +1389,7 @@ def gen_hv_write_advanced() -> List[dict]:
         state = _make_state(random.random() > 0.3)
         examples.append(make_example(state, tmpl.format(grp_name=grp_name), {
             "tool": "hv_read",
-            "params": {"command": "status"},
+            "params": {"command": "status", "channels": ch_list},
             "reason": f"{grp_name} 채널 HV 상태 읽기",
         }))
 
@@ -1396,140 +1494,122 @@ def gen_hv_write_advanced() -> List[dict]:
             "reason": f"ch {chs} 켜기",
         }))
 
-    return examples
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  MOTOR MOVE — 120 samples (absolute 70 + relative right 25 + relative left 25)
-# ══════════════════════════════════════════════════════════════════════════════
-
-def _random_abs_pos() -> float:
-    """0~200mm 범위의 랜덤 절대 위치 (실험 빔 스캔 범위 반영)."""
-    return round(random.choice([
-        round(random.uniform(0.0, 50.0), 1),
-        round(random.uniform(50.0, 100.0), 1),
-        round(random.uniform(100.0, 150.0), 1),
-        round(random.uniform(150.0, 200.0), 1),
-        float(random.choice([0, 10, 20, 30, 50, 75, 85, 100, 110, 120, 125, 150, 175, 200])),
-    ]), 1)
-
-
-def gen_motor_move() -> List[dict]:
-    examples = []
-
-    abs_templates = [
-        # 한국어
-        "X축 {x}mm로 이동해줘", "X축 {x}mm 위치로 이동", "X {x}mm로 이동",
-        "{x}mm로 이동해줘", "{x}으로 이동해줘", "{x}mm 위치로 가줘",
-        "motor {x}mm로 이동", "모터 {x}mm로 이동", "X축 {x}로 이동",
-        "{x}mm 위치로 이동", "{x}mm로 움직여줘", "X {x}으로 이동해줘",
-        "{x}mm 위치 이동", "위치 {x}mm로", "X축 위치 {x}mm",
-        "X축 {x}mm로", "모터 {x}로 이동해줘",
-        "motor x {x}mm", "X 좌표 {x}mm로 이동", "{x}mm으로 맞춰줘",
-        "위치를 {x}mm로 이동해줘", "X {x}mm 위치로", "{x}mm 지점으로 이동",
-        # 영어 혼용
-        "move to {x}mm", "move x to {x}", "go to {x}mm",
-        "motor move to {x}", "set x to {x}mm", "x position {x}mm",
-        "move motor to {x}mm", "motor to {x}",
-        "motor {x}", "position {x}mm", "x축 {x}으로", "x to {x}",
-        "move to {x}", "motor pos {x}mm", "set position {x}mm",
-        "go {x}mm", "motor go to {x}mm",
-        # 반말
-        "{x}mm로 가", "{x}으로 가줘", "X {x}으로", "{x}mm 이동해",
-        "모터 {x}mm", "{x}mm 가줘",
-        # 추가 표현
-        "x축 {x}으로 가줘", "모터 {x}mm 위치로", "{x}mm로 맞춰줘",
-        "X축 {x}mm 지점으로", "x좌표 {x}mm로 맞춰줘",
+    # ── K. 타워 단위 T1~T4 (40 samples) ──────────────────────────────────────
+    tower_v_tmpl = [
+        "{t} {v}로 설정해줘", "{t} 전압 {v}로 바꿔줘", "타워 {t} {v}로",
+        "{t} 채널 {v}로 변경", "{t} HV {v}로", "{t} {v}V로 올려줘",
+        "모든 모듈 {t} {v}로", "{t} 타워 전압 {v}로 설정",
     ]
-
-    # ── Absolute moves (100) — 0-200mm 범위 ──
-    for _ in range(100):
-        x = _random_abs_pos()
-        x_disp = int(x) if x == int(x) else x
-        template = random.choice(abs_templates)
-        user_input = template.format(x=x_disp)
+    tower_read_tmpl = [
+        "{t} HV 확인해줘", "{t} 전압 얼마야", "{t} HV 상태", "{t} 타워 전압 확인",
+    ]
+    for _ in range(24):
+        t = f"T{random.randint(1, 4)}"
+        v_str, v_num = _rand_volt()
+        tmpl = random.choice(tower_v_tmpl)
         state = _make_state(random.random() > 0.3)
-        examples.append(make_example(state, user_input, {
-            "tool": "motor_move",
-            "params": {"x": x},
-            "reason": f"X축 절대위치 {x}mm로 이동",
+        examples.append(make_example(state, tmpl.format(t=t, v=v_str), {
+            "tool": "hv_write",
+            "params": {"command": "voltage", "channels": t, "voltage": v_num},
+            "reason": f"{t} 타워 전체 전압을 {v_num}V로 변경",
+        }))
+    for _ in range(16):
+        t = f"T{random.randint(1, 4)}"
+        tmpl = random.choice(tower_read_tmpl)
+        state = _make_state(random.random() > 0.3)
+        examples.append(make_example(state, tmpl.format(t=t), {
+            "tool": "hv_read",
+            "params": {"command": "status", "channels": t},
+            "reason": f"{t} 타워 HV 상태 읽기",
         }))
 
     return examples
 
 
+
 # ══════════════════════════════════════════════════════════════════════════════
-#  MOTOR ALARM RESET — 40 samples
+#  HV WRITE MODULE — 모듈 단위 제어 (80 samples)
+#  "M5 1500V", "M3 M7 꺼줘" 등
 # ══════════════════════════════════════════════════════════════════════════════
 
-def gen_motor_alarm_reset() -> List[dict]:
+def gen_hv_write_module() -> List[dict]:
+    """모듈 단위(M{1-9}) HV 제어 — 전압 변경 및 ON/OFF."""
     examples = []
-    templates = [
-        # 알람/락 직접 언급
-        "모터 알람 리셋해줘", "모터 알람 풀어줘", "모터 락 풀어줘",
-        "모터 알람 해제해줘", "motor alarm reset", "motor alarm 풀어줘",
-        "alarm reset 해줘", "모터 alarm 풀어", "모터 알람 초기화",
-        # 에러/폴트 언급
-        "모터 에러 해제해줘", "모터 fault 풀어줘", "모터 폴트 리셋",
-        "motor fault reset", "motor error reset", "모터 에러 리셋",
-        "모터 fault 해제", "모터 에러 풀어줘",
-        # 범위 초과 후
-        "모터 범위 초과 됐는데 리셋해줘", "범위 초과 알람 풀어줘",
-        "모터가 범위 넘어갔는데 리셋해줘", "위치 범위 초과 리셋",
-        "모터 범위 에러 해제", "리미트 알람 풀어줘",
-        # 안움직이는 상황
-        "모터가 안움직여 알람 때문에", "모터 알람 때문에 못움직여 풀어줘",
-        "모터가 락 걸렸어 풀어줘", "모터 움직임이 안 돼 알람 리셋",
-        "모터 락 걸려서 리셋 좀", "모터가 멈췄는데 알람 때문에",
-        # 반말/채팅
-        "모터 알람 리셋", "알람 풀어", "락 풀어", "모터 에러 풀어",
-        "alarm reset 좀", "모터 리셋", "모터 fault 풀어",
-        # 영어 혼용
-        "motor lock 풀어줘", "motor alarm clear", "reset motor alarm",
-        "모터 unlock 해줘", "clear motor fault",
+
+    def _rand_volt():
+        v = random.choice([800, 900, 1000, 1200, 1400, 1500, 1550, 1600, 1650, 1700])
+        return v, float(v)
+
+    # ── A. 단일 모듈 전압 변경 (40 samples) ──────────────────────────────────
+    single_mod_tmpl = [
+        "{m} {v}로 설정해줘", "{m} HV {v}로 바꿔줘", "{m} 전압 {v}로 변경",
+        "{m} {v}V로 올려줘", "{m} {v}로 수정해줘", "{m} 모듈 {v}로",
+        "{m} 전압 {v}로 해줘", "{m} HV {v} 세팅", "{m} {v}V 설정",
+        "{m} 고전압 {v}로 설정", "{m} 전압 {v}", "{m} {v}로",
+        "모듈 {m} {v}V로 바꿔줘", "module {m} hv {v}",
+        "{m} set to {v}", "{m} voltage {v}",
+        "{m} {v}로 올려", "{m} {v} please",
+        "{m} HV {v}로 올려줘", "{m} 전압을 {v}로",
     ]
-    for template in templates:
+    for _ in range(40):
+        m = f"M{random.randint(1, 9)}"
+        v_str, v_num = _rand_volt()
+        tmpl = random.choice(single_mod_tmpl)
         state = _make_state(random.random() > 0.3)
-        examples.append(make_example(state, template, {
-            "tool": "motor_alarm_reset",
-            "params": {},
-            "reason": "모터 알람/폴트 리셋",
+        examples.append(make_example(state, tmpl.format(m=m, v=v_str), {
+            "tool": "hv_write",
+            "params": {"command": "voltage", "channels": m, "voltage": v_num},
+            "reason": f"{m} 모듈 전체 채널 전압을 {v_num}V로 변경",
         }))
+
+    # ── B. 복수 모듈 전압 변경 (20 samples) ──────────────────────────────────
+    multi_mod_tmpl = [
+        "{m1} {m2} {v}로 설정해줘", "{m1}랑 {m2} {v}로 바꿔줘",
+        "{m1}, {m2} 전압 {v}로", "{m1} {m2} HV {v}로 수정",
+        "{m1}하고 {m2} {v}V로 올려줘", "{m1} and {m2} {v}로 설정",
+        "{m1}, {m2} {v}V로 변경해줘", "{m1} {m2} 모듈 {v}로",
+    ]
+    for _ in range(20):
+        mods = random.sample([f"M{i}" for i in range(1, 10)], 2)
+        v_str, v_num = _rand_volt()
+        tmpl = random.choice(multi_mod_tmpl)
+        state = _make_state(random.random() > 0.3)
+        examples.append(make_example(state, tmpl.format(m1=mods[0], m2=mods[1], v=v_str), {
+            "tool": "hv_write",
+            "params": {"command": "voltage", "channels": mods, "voltage": v_num},
+            "reason": f"{mods[0]}, {mods[1]} 모듈 전압을 {v_num}V로 변경",
+        }))
+
+    # ── C. 모듈 ON/OFF (20 samples) ──────────────────────────────────────────
+    mod_on_tmpl = [
+        "{m} 켜줘", "{m} HV on", "{m} 전원 켜줘", "{m} on 해줘",
+        "모듈 {m} 켜줘", "{m} HV 켜줘", "turn on {m}",
+    ]
+    mod_off_tmpl = [
+        "{m} 꺼줘", "{m} HV off", "{m} 전원 꺼줘", "{m} off 해줘",
+        "모듈 {m} 꺼줘", "{m} HV 꺼줘", "turn off {m}",
+    ]
+    for _ in range(10):
+        m = f"M{random.randint(1, 9)}"
+        tmpl = random.choice(mod_on_tmpl)
+        state = _make_state(random.random() > 0.3)
+        examples.append(make_example(state, tmpl.format(m=m), {
+            "tool": "hv_write",
+            "params": {"command": "on", "channels": m},
+            "reason": f"{m} 모듈 켜기",
+        }))
+    for _ in range(10):
+        m = f"M{random.randint(1, 9)}"
+        tmpl = random.choice(mod_off_tmpl)
+        state = _make_state(random.random() > 0.3)
+        examples.append(make_example(state, tmpl.format(m=m), {
+            "tool": "hv_write",
+            "params": {"command": "off", "channels": m},
+            "reason": f"{m} 모듈 끄기",
+        }))
+
     return examples
 
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  MOTOR STATUS — 40 samples
-# ══════════════════════════════════════════════════════════════════════════════
-
-def gen_motor_status() -> List[dict]:
-    examples = []
-    templates = [
-        # 위치 확인
-        "모터 지금 어디야", "현재 모터 위치", "X축 위치 알려줘",
-        "지금 위치 얼마야", "모터 위치 확인", "현재 X축 위치",
-        "모터 어디 있어", "X 위치 확인해줘", "현재 위치 얼마야",
-        "모터 포지션 확인", "지금 X축 어디야",
-        # 반말/채팅
-        "위치 얼마야", "지금 위치", "모터 위치", "X 위치",
-        "어디야", "포지션", "pos",
-        # 영어
-        "motor position", "motor status", "where is motor",
-        "current position", "get position", "motor pos",
-        "x position", "check position", "position status",
-        # 복합
-        "지금 모터가 몇 mm야", "현재 X 좌표 알려줘", "X축 지금 몇 mm",
-        "모터 현재 mm 얼마야", "X축 좌표 확인", "현재 위치 mm",
-        "X축 지금 어디 있어", "모터 현재 좌표",
-    ]
-    for template in templates:
-        state = _make_state(random.random() > 0.3)
-        examples.append(make_example(state, template, {
-            "tool": "motor_status",
-            "params": {},
-            "reason": "현재 모터 X축 위치 확인",
-        }))
-    return examples
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1578,11 +1658,11 @@ def gen_unclear() -> List[dict]:
         ("show plot", "어떤 런 번호의 DQM 플랏을 그릴까요?"),
 
         # ── DQM single type — 채널 누락 ──
-        ("run {r} single 그려줘", "어떤 채널을 그릴까요? (예: T1, T1-C, T1-S)"),
-        ("run {r} 채널 그려줘", "어떤 채널을 그릴까요? (예: T1, T1-C, T1-S)"),
-        ("{r} single 플랏", "어떤 채널을 그릴까요? (예: T1, T1-C, T1-S)"),
-        ("run {r} 싱글 그려줘", "어떤 채널을 그릴까요? (예: T1, T1-C, T1-S)"),
-        ("{r} 번 single DQM", "어떤 채널을 그릴까요? (예: T1, T1-C, T1-S)"),
+        ("run {r} single 그려줘", "어떤 채널을 그릴까요? (예: M1, M1-T1-C, M1-T1-S)"),
+        ("run {r} 채널 그려줘", "어떤 채널을 그릴까요? (예: M1, M1-T1-C, M1-T1-S)"),
+        ("{r} single 플랏", "어떤 채널을 그릴까요? (예: M1, M1-T1-C, M1-T1-S)"),
+        ("run {r} 싱글 그려줘", "어떤 채널을 그릴까요? (예: M1, M1-T1-C, M1-T1-S)"),
+        ("{r} 번 single DQM", "어떤 채널을 그릴까요? (예: M1, M1-T1-C, M1-T1-S)"),
 
         # ── DAQ 불명확 (이벤트 수 누락) ──
         ("DAQ 돌려줘", "몇 개의 이벤트를 수집할까요?"),
@@ -1679,16 +1759,16 @@ def gen_unclear() -> List[dict]:
 #
 #  Covers three gaps the existing gen_dqm_plot() misses:
 #  1. Relative reference ("방금"/"이번 런") + specific channel  → must use current_run
-#  2. "overlay" keyword  → type: single (users say "T1S overlay" for single-channel plot)
-#  3. No-dash input ("T1S", "T2C")  → model must output ["T1-S"], ["T2-C"] with hyphen
+#  2. "overlay" keyword  → type: single (users say "M1T1S overlay" for single-channel plot)
+#  3. No-dash input ("M1T1S", "M2T2C")  → model must output ["M1-T1-S"], ["M2-T2-C"] with hyphens
 # ══════════════════════════════════════════════════════════════════════════════
 
 def gen_dqm_overlay_relative_single() -> List[dict]:
     examples = []
 
     # ── A. Relative reference + single channel (120) ──────────────────────────
-    #    User says "방금 run T1S overlay" or "이번 런 T1-S 그려줘"
-    #    → must resolve to current_run, type: single, modules with hyphen
+    #    User says "방금 run M1T1S overlay" or "이번 런 M1-T1-S 그려줘"
+    #    → must resolve to current_run, type: single, modules with hyphens
     rel_single_tmpl = [
         # hyphenated channel
         "방금 {ch} 그려줘",           "이번 런 {ch} 그려줘",
@@ -1713,8 +1793,8 @@ def gen_dqm_overlay_relative_single() -> List[dict]:
 
     for _ in range(120):
         modules = [_random_channel()]   # single channel only for clarity
-        ch = modules[0]                  # e.g. "T3-S"
-        nch = _nondash(ch)               # e.g. "T3S"
+        ch = modules[0]                  # e.g. "M3-T2-S"
+        nch = _nondash(ch)               # e.g. "M3T2S"
         tmpl = random.choice(rel_single_tmpl)
         state = _make_state(with_agent=True)
         run = state["current_run"]
@@ -2126,11 +2206,7 @@ def main():
     all_examples.extend(gen_hv_read())                      # 150  (all_ch 120 + named_ch 30)
     all_examples.extend(gen_hv_write())                     # 330  (single 150 + multi 30 + all 30 + on/off 60)
     all_examples.extend(gen_hv_write_advanced())            # 340  (S 60 + C만 50 + TRIG 40 + MCP 40 + 짝수 35 + 홀수 25 + 범위 30 + read 30 + on/off 20)
-    all_examples.extend(gen_motor_move())                   # 100  (absolute, 0-200mm)
-    all_examples.extend(gen_motor_status())                 # 40  (position query)
-    all_examples.extend(gen_motor_alarm_reset())            # 40  (alarm/fault reset)
-    all_examples.extend(gen_hodoscope_hv_read())            #  40  (→ hv_read, CAEN+Hodoscope combined)
-    all_examples.extend(gen_hodoscope_hv_write())           #  45  (set 35 + off 10)
+    all_examples.extend(gen_hv_write_module())              #  80  (단일모듈 40 + 복수모듈 20 + on/off 20)
     all_examples.extend(gen_unclear())                      # 200  (clarify + off-topic)
 
     random.shuffle(all_examples)

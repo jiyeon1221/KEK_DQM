@@ -32,7 +32,12 @@ SYSTEM_PROMPT = """You are the Brain Agent for a test beam experiment (KEK/CERN)
 Your job is to interpret the operator's ad-hoc request and call the right tool.
 
 Available tools:
-- daq_run: Run DAQ data collection. params: {"events": int}
+- daq_run: Run DAQ data collection. params: {"events": int, "config": str (optional)}
+  - config is the DAQ config name passed to the run script. It can be ANY name the user says
+    (e.g. "test", "setup", "setup1", "config1", "physics", ...). Default is "setup" —
+    OMIT config unless the user explicitly names one
+    (e.g. "setup1으로 10000개", "config1 설정으로", "test로 돌려줘").
+    Copy the name EXACTLY as the user wrote it — never invent or normalize it.
 - dqm_plot: Generate DQM plots for a run and display in the DQM panel.
   params: {"run_number": int, "method": "IntADC"|"PeakADC", "type": "full"|"heatmap"|"single", "modules": [list]}
   - type defaults to "full" (all towers + heatmap). No modules needed for full.
@@ -91,6 +96,8 @@ RULES:
    If the request names a channel subset (짝수/홀수/C/S/타워/모듈/채널명/슬롯), pass it in "channels" just like hv_write;
    otherwise omit "channels" to read ALL channels.
 6. DAQ requires an event count. If the user says "DAQ 돌려줘" without a number, ask how many events.
+   If the user names a DAQ config (test, setup1, config1 등 — 어떤 이름이든), put it in "config";
+   otherwise OMIT config (default "setup").
 7. Channel names like M1T1C, M1T1S, M2T3C, ... are HV channels (format: M{1-9}T{1-4}{C,S}) — NOT log columns.
    A SINGLE channel name + voltage → channels: [that single channel].
    ONLY use channels: "all" when the input explicitly says 전체/모든/전 채널/all channels.
@@ -323,6 +330,10 @@ class BrainAgent(BaseAgent):
                 ev = self._extract_events_from_text(user_input)
                 if ev:
                     params["events"] = ev
+            if not params.get("config"):
+                cfg = self._extract_config_from_text(user_input)
+                if cfg:
+                    params["config"] = cfg
 
     def _resume_pending(self, user_input: str):
         """대기 중인 누락 필드를 이번 입력으로 채운다.
@@ -353,6 +364,10 @@ class BrainAgent(BaseAgent):
             if ev:
                 params["events"] = ev
                 filled = True
+                if not params.get("config"):
+                    cfg = self._extract_config_from_text(user_input)
+                    if cfg:
+                        params["config"] = cfg
         elif field == "modules":
             mods = self._extract_modules_from_text(user_input)
             if mods:
@@ -380,9 +395,34 @@ class BrainAgent(BaseAgent):
             return "IntADC"
         return None
 
+    # config 후보에서 제외할 일반 단어 (DAQ 관련 영어 표현들)
+    _CONFIG_STOPWORDS = {
+        "daq", "run", "runs", "event", "events", "evt", "evts", "data",
+        "start", "take", "collect", "get", "fire", "acquire", "please", "now", "with",
+    }
+
+    @classmethod
+    def _extract_config_from_text(cls, text: str) -> Optional[str]:
+        # config 이름은 임의 문자열(test, setup1, config1, physics ...)일 수 있다.
+        # [A-Za-z0-9_-]로 제한 — \w는 한글 조사("test로")까지 매칭하므로 사용 금지
+        # 1) 명시 키워드: "config setup1", "컨피그 test", "config=abc"
+        m = re.search(r'(?:config|컨피그|콘피그)\s*[:=]?\s*([A-Za-z][A-Za-z0-9_-]*)', text, re.IGNORECASE)
+        if m and m.group(1).lower() not in cls._CONFIG_STOPWORDS:
+            return m.group(1)
+        # 2) "<이름> 설정으로 / <이름> 셋업으로" 형태
+        m = re.search(r'([A-Za-z][A-Za-z0-9_-]*)\s*(?:설정|셋업|세팅)', text, re.IGNORECASE)
+        if m and m.group(1).lower() not in cls._CONFIG_STOPWORDS:
+            return m.group(1)
+        # 3) "<이름>으로/로 ..." 형태 (예: "setup1로 10000개", "test로 돌려줘")
+        m = re.search(r'([A-Za-z][A-Za-z0-9_-]*)(?:으로|로)(?=[\s,.!?]|$)', text, re.IGNORECASE)
+        if m and m.group(1).lower() not in cls._CONFIG_STOPWORDS:
+            return m.group(1)
+        return None
+
     @staticmethod
     def _extract_events_from_text(text: str) -> Optional[int]:
-        m = re.search(r'(\d+)\s*(k|천|만)?', text, re.IGNORECASE)
+        # (?<![A-Za-z]) — "setup1" 같은 config 이름 속 숫자를 이벤트 수로 오인하지 않도록
+        m = re.search(r'(?<![A-Za-z])(\d+)\s*(k|천|만)?', text, re.IGNORECASE)
         if not m:
             return None
         n = int(m.group(1))
@@ -413,7 +453,9 @@ class BrainAgent(BaseAgent):
     def _format_confirm_preview(tool_name: str, params: dict) -> str:
         if tool_name == "daq_run":
             events = params.get("events", "?")
-            return f"DAQ 실행\n  이벤트 수: {events:,}" if isinstance(events, int) else f"DAQ 실행\n  이벤트 수: {events}"
+            config = params.get("config", "setup")
+            events_str = f"{events:,}" if isinstance(events, int) else f"{events}"
+            return f"DAQ 실행\n  Config: {config}\n  이벤트 수: {events_str}"
         if tool_name == "hv_write":
             cmd = params.get("command", "?")
             ch = params.get("channels", "?")

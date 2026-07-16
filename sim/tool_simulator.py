@@ -67,11 +67,12 @@ class ToolSimulator:
     ) -> str:
         run_number = self._next_run_number()
         events = params.get("events", "?")
+        config = params.get("config", "setup")
         program = params.get("program", "?")
         beam = params.get("beam_energy", "?")
         lines = [
             "🔧 [SIM] DAQ Run (no hardware)",
-            f"   Program: {program} | Beam: {beam} GeV | Events: {events}",
+            f"   Program: {program} | Config: {config} | Beam: {beam} GeV | Events: {events}",
             f"   pos_h={params.get('pos_h')} pos_v={params.get('pos_v')}",
             f"Run: {run_number}",
             "Received termination",

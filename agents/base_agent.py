@@ -2,6 +2,7 @@
 """Base Agent — abstract base class for all scenario agents (EnergyScan, CalibScan, HVEqualization)."""
 
 import json
+import re
 import time
 import torch
 from typing import Dict, Any, Optional, List, Callable
@@ -24,6 +25,84 @@ class ToolFatalError(Exception):
     pass
 
 
+# ── 이벤트 개수 표시 유틸 ──
+# 모델이 자릿수(0의 개수)를 자주 틀리므로, 사용자에게 보이는 이벤트 개수는
+# 항상 코드가 state의 진짓값으로부터 렌더링/교정한다. LLM 출력 텍스트를 신뢰하지 않는
+# 기존 원칙(_finalize_ai_message)의 이벤트-개수판.
+
+_EVENT_KEYWORD = r'(?:이벤트|events?|evt)'
+# 숫자(콤마 허용)가 이벤트 키워드 바로 앞: "10000 이벤트", "10,000개 events"
+_RE_NUM_BEFORE_EVENT = re.compile(r'([\d,]+)(\s*개?\s*' + _EVENT_KEYWORD + r')', re.IGNORECASE)
+# 이벤트 키워드(+ 수/콜론)가 숫자 바로 앞: "이벤트 수: 10000", "events: 1000", "이벤트 10000개"
+_RE_NUM_AFTER_EVENT = re.compile(r'(' + _EVENT_KEYWORD + r'\s*수?\s*[:：]?\s*)([\d,]+)', re.IGNORECASE)
+
+
+def format_event_count(n) -> str:
+    """이벤트 개수를 천 단위 콤마 문자열로. 정수화 불가하면 원본을 문자열로."""
+    try:
+        return f"{int(n):,}"
+    except (TypeError, ValueError):
+        return str(n)
+
+
+_RE_NUMBER = re.compile(r'\d+(?:\.\d+)?')
+_RE_GEV_SUFFIX = re.compile(r'\s*(?:GeV|기가)', re.IGNORECASE)
+
+
+# 천 단위 콤마 그룹 후보: "50,000" / "1,234,567" (콤마 뒤 정확히 3자리 반복)
+_RE_COMMA_GROUP = re.compile(r'\d{1,3}(?:,\d{3})+(?!\d)')
+
+
+def _normalize_thousands_commas(text: str) -> str:
+    """"10,000" → "10000" (천 단위 콤마 제거 — 나열 구분 콤마는 보존).
+    그룹 전체가 GeV/기가로 끝나면 에너지 나열("50,100,120GeV")이므로 병합하지 않는다
+    (빔 에너지는 최대 수백 GeV라 천 단위 콤마가 필요한 경우가 없음)."""
+    def _repl(m):
+        if _RE_GEV_SUFFIX.match(text, m.end()):
+            return m.group()  # 에너지 나열 → 콤마 보존
+        return m.group().replace(',', '')
+    return _RE_COMMA_GROUP.sub(_repl, text)
+
+
+def extract_number_tokens(text: str) -> List[tuple]:
+    """텍스트의 숫자 토큰을 (값, 시작위치, 끝위치, 에너지단위 여부) 리스트로 반환.
+    위치는 천 단위 콤마 정규화 후 텍스트 기준. 에너지단위 여부 = 숫자 바로 뒤에
+    GeV/기가가 붙는지 (예: '3GeV' → (3.0, s, e, True)).
+    코드가 LLM 파싱의 짝(에너지↔이벤트 수)을 결정론적으로 재구성/교정할 때 사용."""
+    if not isinstance(text, str):
+        return []
+    normalized = _normalize_thousands_commas(text)
+    tokens = []
+    for m in _RE_NUMBER.finditer(normalized):
+        is_energy = bool(_RE_GEV_SUFFIX.match(normalized, m.end()))
+        tokens.append((float(m.group()), m.start(), m.end(), is_energy))
+    return tokens
+
+
+def extract_numbers_from_text(text: str) -> set:
+    """텍스트에 등장하는 모든 숫자를 float 집합으로 추출 (천 단위 콤마 정규화).
+    LLM이 파싱해 state에 넣는 숫자가 사용자 입력에 실제로 존재하는지(지어낸/자릿수
+    틀린 숫자가 아닌지) 검증하는 데 사용한다. 형식이 어떻게 섞여 있어도 동작."""
+    return {v for v, _, _, _ in extract_number_tokens(text)}
+
+
+def correct_event_count_in_text(text: str, n) -> str:
+    """LLM이 문장에 쓴 이벤트 개수를 state 진짓값(콤마 포맷)으로 교정.
+    이벤트 키워드에 인접한 숫자만 대상으로 하여 전압/에너지/ADC 등은 건드리지 않는다."""
+    if not isinstance(text, str) or not text:
+        return text
+    try:
+        target = int(n)
+    except (TypeError, ValueError):
+        return text
+    if target <= 0:
+        return text
+    formatted = f"{target:,}"
+    text = _RE_NUM_BEFORE_EVENT.sub(lambda m: formatted + m.group(2), text)
+    text = _RE_NUM_AFTER_EVENT.sub(lambda m: m.group(1) + formatted, text)
+    return text
+
+
 
 class BaseAgent(ABC):
 
@@ -43,6 +122,9 @@ class BaseAgent(ABC):
         self.state = {}
         self.conversation_history: List[Dict[str, Any]] = []
         self.max_history = MAX_CONVERSATION_HISTORY
+        # 숫자 출처 검증용: LLM이 update_state에 넣는 숫자가 이 입력에 실제로
+        # 등장했는지 _guard_update_state에서 확인한다.
+        self._last_user_input: str = ""
     
     def __enter__(self):
         self.load()
@@ -273,11 +355,14 @@ class BaseAgent(ABC):
         pos: Optional[Dict[str, float]] = None,
         pos_rot: float = 0.0,
         pos_tilt: float = 0.0,
+        config: Optional[str] = None,
     ) -> None:
         if events is not None:
             params["events"] = events
         if beam_energy is not None:
             params["beam_energy"] = beam_energy
+        if config is not None:
+            params["config"] = config
         params["program"] = program
         if pos is not None:
             params["pos_h"] = pos["x"]
@@ -357,6 +442,25 @@ class BaseAgent(ABC):
         """거부 사유 반환 → 출력 차단 후 재시도. None이면 통과."""
         return None
 
+    def _guard_update_state(self, updates: Dict[str, Any]) -> Optional[str]:
+        """update_state 적용 직전 검증. 거부 사유 반환 → 적용 차단 후 재시도. None이면 통과.
+        서브클래스가 LLM이 파싱한 숫자(이벤트 수·에너지 등)의 출처를
+        _last_user_input과 대조할 때 사용 (자릿수 오류 방어)."""
+        return None
+
+    def _numbers_in_last_input(self) -> set:
+        return extract_numbers_from_text(self._last_user_input)
+
+    def _finalize_ai_message(self, message: str) -> str:
+        """전송 직전 메시지를 보정할 기회.
+        기본 동작: state의 target_events를 진짓값으로 삼아, 모델이 문장에 쓴
+        이벤트 개수의 자릿수를 교정하고 콤마 포맷으로 통일한다.
+        서브클래스가 오버라이드할 땐 super()를 호출해 이 교정을 유지할 것."""
+        corrected = correct_event_count_in_text(message, self.state.get("target_events"))
+        if corrected != message:
+            self.log(f"이벤트 개수 표시 교정(state 기준): {message!r} → {corrected!r}")
+        return corrected
+
     def _stop_requested(self) -> bool:
         """WebSocketIO의 stop_event가 set이면 True (TerminalIO는 항상 False)."""
         ev = getattr(self.io, "stop_event", None)
@@ -415,6 +519,22 @@ class BaseAgent(ABC):
                 _error_count = 0
 
                 if "update_state" in decision:
+                    # 숫자 출처 검증 등 — 틀린 값이 state(진짓값)에 들어가기 전에 차단.
+                    rejection = self._guard_update_state(decision["update_state"])
+                    if rejection:
+                        self.log(f"update_state guard blocked: {rejection}")
+                        self.add_to_history("assistant", json.dumps(decision, ensure_ascii=False))
+                        self.add_to_history("user", rejection)
+                        _guard_reject += 1
+                        if _guard_reject >= _MAX_GUARD_REJECT:
+                            self.log(f"Guard-reject 워치독 발동 ({_guard_reject}회 연속 거부) — 종료")
+                            self.io.send_ai_message(
+                                "에이전트가 올바른 다음 단계를 내지 못하고 같은 응답을 반복하고 있습니다. "
+                                "세션을 종료합니다. 다시 시작해주세요."
+                            )
+                            break
+                        continue
+                    _guard_reject = 0  # state가 실제로 진전 → 연속 거부 리셋
                     before = self._completed_count()
                     self._update_state(decision["update_state"])
                     after = self._completed_count()
@@ -427,6 +547,8 @@ class BaseAgent(ABC):
                 tool_name = decision.get("tool")
 
                 if message:
+                    message = self._finalize_ai_message(message)
+                    decision["message"] = message
                     rejection = self._guard_ai_message(message)
                     if rejection:
                         self.log(f"message guard blocked: {rejection}")
@@ -446,6 +568,7 @@ class BaseAgent(ABC):
                     self.io.send_ai_message(message)
                     self.add_to_history("assistant", json.dumps(decision, ensure_ascii=False))
                     user_input = self.io.get_input()
+                    self._last_user_input = user_input
                     if user_input in ["종료", "exit"]:
                         break
                     before = self._completed_count()

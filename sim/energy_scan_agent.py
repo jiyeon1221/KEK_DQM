@@ -30,6 +30,7 @@ class EnergyScanSimAgent(SimExecMixin, EnergyScanAgent):
                 beam_energy=energy_key,
                 program="EM Scan",
                 pos=self._position_for_current_step(),
+                daq_config=self._daq_config_for(energy_key),
             )
             if run_number:
                 self.state["last_run_number"] = run_number

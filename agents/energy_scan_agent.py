@@ -2,6 +2,7 @@
 """Energy Scan Agent — 다양한 빔 에너지에서 데이터 수집 자동화"""
 
 import json
+import re
 import sys
 from typing import Dict, Any, Optional
 from pathlib import Path
@@ -9,7 +10,7 @@ from datetime import datetime
 
 from tools.daq_tool import DAQRunTool
 
-from .base_agent import BaseAgent
+from .base_agent import BaseAgent, format_event_count, extract_number_tokens, _normalize_thousands_commas
 sys.path.append(str(Path(__file__).parent.parent))
 from config import AGENT_MODELS, MSG_PLOT_CONFIRM
 
@@ -93,7 +94,7 @@ Follow these steps EXACTLY:
 
 === STEP 0: Get Energy Config (only when phase is "config") ===
 0a. Ask user for energy settings:
-  {"message": "에너지 설정을 입력해주세요.\n예) 1GeV 50000개 2GeV 200000개 5GeV 100000개  또는  1GeV 80000 3GeV 500000 5GeV 300000"}
+  {"message": "에너지 설정을 입력해주세요.\n예) 10GeV 100000개 20GeV 200000개 50GeV 300000개  또는  10GeV 80000 30GeV 500000 120GeV 300000"}
 
 After user responds, parse their input:
 0b. Update state with parsed config:
@@ -101,6 +102,10 @@ After user responds, parse their input:
   CRITICAL: energy keys must be INTEGERS (e.g., 1, 2, 3). scan_order must be sorted ascending.
   CRITICAL: beam_energy in GeV → store as number (integer if whole: "2GeV" → 2; float if decimal: "2.5GeV" → 2.5). NEVER convert to MeV.
   CRITICAL: If user says "모두", "각각", or "씩" with one number (e.g., "모두 500개"), apply that number to ALL energies.
+  CRITICAL: If the user names a DAQ config for an energy (e.g. "3GeV setup1로 200000"),
+  add "config": "<name>" to THAT energy's entry ONLY (copy the name EXACTLY as written).
+  If a config name appears before ALL energies, apply it to every energy.
+  OMIT "config" when the user does not name one — the default ("setup") applies.
 
 === STEP 1: Move to M5T3 ===
 CRITICAL RULE: After STEP 0, when phase is "idle" and energy_config is NOT empty, start STEP 1.
@@ -131,6 +136,7 @@ Params: {
     "pos_tilt": 1.0,
     "beam_energy": <energy>
 }
+(If energy_config[energy] has "config", also include "config": <that name> in Params. Omit otherwise.)
 (Plot is auto-rendered by DQM live during DAQ — never call any plot tool.)
 
 2c. Request Plot Confirmation (only AFTER the DAQ tool has run):
@@ -184,10 +190,11 @@ When ALL energies are completed, the SYSTEM sends the completion message and end
             for e in so:
                 cfg = ec.get(e, {})
                 status = "✅" if cfg.get("completed") else "➡️" if e == self.state.get("current_energy") else "  "
+                cfg_suffix = f" config={cfg['config']}" if cfg.get("config") else ""
                 lines.append(
                     f"  {status} {e} GeV: target={cfg.get('target_events', '?')} "
                     f"collected={cfg.get('collected_events', 0)} "
-                    f"runs={cfg.get('runs', [])} completed={cfg.get('completed', False)}"
+                    f"runs={cfg.get('runs', [])} completed={cfg.get('completed', False)}{cfg_suffix}"
                 )
 
         return "\n".join(lines)
@@ -283,9 +290,10 @@ When ALL energies are completed, the SYSTEM sends the completion message and end
             collected = config.get('collected_events', 0)
             target = config.get('target_events', 0)
             mark = "✅" if completed else ("➡️ " if energy == self.state['current_energy'] else "  ")
-            status_text = "Completed" if completed else f"{collected}/{target} events"
+            status_text = "Completed" if completed else f"{format_event_count(collected)}/{format_event_count(target)} events"
             run_info = f" (Runs: {config['runs']})" if config['runs'] else ""
-            print(f"  {mark} {energy} GeV: {status_text}{run_info}")
+            cfg_info = f" [config: {config['config']}]" if config.get('config') else ""
+            print(f"  {mark} {energy} GeV: {status_text}{run_info}{cfg_info}")
         print("-" * 70)
 
     def _pre_iteration(self):
@@ -337,6 +345,11 @@ When ALL energies are completed, the SYSTEM sends the completion message and end
         """EM Scan은 M5T3 고정 위치."""
         return {"x": self.t5_x, "y": self.t5_y}
 
+    def _daq_config_for(self, energy_key) -> str:
+        """해당 에너지의 DAQ config 이름 — 에너지별 지정이 없으면 기본 daq_config("setup")."""
+        cfg = self.state.get("energy_config", {}).get(energy_key, {}) if energy_key is not None else {}
+        return cfg.get("config") or self.state.get("daq_config", "setup")
+
     def _resolve_daq_energy_key(self):
         """DAQ용 에너지 — state/scan_order 기준 (LLM params 무시)."""
         energy_key = self.state.get("current_energy")
@@ -374,6 +387,7 @@ When ALL energies are completed, the SYSTEM sends the completion message and end
                 pos=self._position_for_current_step(),
                 pos_rot=1.5,
                 pos_tilt=1.0,
+                config=self._daq_config_for(energy_key),
             )
 
             # DAQ 실행. daq_tool 내부의 dqm_session.start()이 monit --LIVE를 띄워서
@@ -426,8 +440,192 @@ When ALL energies are completed, the SYSTEM sends the completion message and end
         "last_run_number",
     })
 
+    # 나열 구분자: "1,2,3GeV"처럼 리스트로 연결된 숫자를 같은 에너지 그룹으로 묶는다.
+    # 공백만으로는 나열로 보지 않음("3GeV 10000 2GeV"의 10000이 에너지로 흡수되는 것 방지)
+    _ENUM_SEP = re.compile(r'^\s*(?:[,·、/&]|와|과|및|그리고|and)\s*$', re.IGNORECASE)
+    # 나열 멤버로 인정할 에너지 상한 — 이벤트 수(보통 수천 이상)와 구분
+    _MAX_ENUM_ENERGY = 1000
+
+    # DAQ config 이름 토큰: 문자로 시작하는 ASCII 단어 (예: setup1, test, config1).
+    # lookbehind로 "10GeV"의 GeV처럼 숫자/문자에 붙은 꼬리는 제외.
+    _RE_CONFIG_TOKEN = re.compile(r'(?<![0-9A-Za-z_])([A-Za-z][A-Za-z0-9_-]*)')
+    # config 이름이 아닌 일반 ASCII 단어 (단독 "GeV", 영어 표현 등)
+    _CONFIG_TOKEN_STOPWORDS = {
+        "gev", "mev", "tev", "and", "all", "events", "event", "evt", "evts",
+        "run", "daq", "k",
+    }
+
+    def _parse_config_pairs(self, text: str) -> Optional[Dict[float, tuple]]:
+        """GeV 앵커 기반으로 사용자 입력에서 (에너지 → (이벤트 수, DAQ config 이름))
+        짝을 결정론적으로 파싱. config 이름은 해당 에너지 구간에 있으면 그 에너지에,
+        첫 에너지보다 앞에 있으면 전체에 적용, 없으면 None (기본 "setup").
+        확실하게 짝지을 수 있을 때만 결과 반환, 애매하면 None (출처 검증으로 폴백).
+        예) '3GeV 10000개, 2GeV는 30000'            → {3.0: (10000, None), 2.0: (30000, None)}
+            '1GeV 10000 2GeV 20000 3GeV setup1로 200000'
+                → {1.0: (10000, None), 2.0: (20000, None), 3.0: (200000, 'setup1')}
+            'test로 1,2GeV 모두 500개'               → {1.0: (500, 'test'), 2.0: (500, 'test')}"""
+        normalized = _normalize_thousands_commas(text) if isinstance(text, str) else ""
+
+        # DAQ config 이름 토큰을 먼저 떼어내고 같은 길이의 공백으로 치환 —
+        # 이름 속 숫자("setup1"의 1)가 에너지/이벤트 토큰으로 오인되는 것 방지.
+        config_tokens: list = []  # (이름, 시작위치)
+        def _blank(m):
+            tok = m.group(1)
+            if tok.lower() in self._CONFIG_TOKEN_STOPWORDS:
+                return tok
+            config_tokens.append((tok, m.start(1)))
+            return " " * len(tok)
+        blanked = self._RE_CONFIG_TOKEN.sub(_blank, normalized)
+
+        tokens = extract_number_tokens(blanked)  # 위치는 blanked(=normalized) 기준
+        normalized = blanked  # 이하 구분자 검사도 blanked 기준
+
+        # 1) 그룹핑: 나열 구분자로 이어진 plain 숫자들이 GeV 앵커 숫자로 끝나면
+        #    전체를 하나의 에너지 그룹으로 ("1,2,3GeV" → [1,2,3])
+        groups: list = []   # 각 그룹: [(에너지값, 위치), ...]
+        plains: list = []   # (값, 위치)
+        chain: list = []    # 나열 구분자로 이어지는 중인 plain 숫자들
+        prev_end = None
+        for v, s, e, is_energy in tokens:
+            linked = bool(chain) and prev_end is not None and bool(self._ENUM_SEP.match(normalized[prev_end:s]))
+            if is_energy:
+                if linked and all(cv < self._MAX_ENUM_ENERGY for cv, _ in chain):
+                    groups.append(chain + [(v, s)])
+                else:
+                    plains.extend(chain)
+                    groups.append([(v, s)])
+                chain = []
+            else:
+                if linked:
+                    chain.append((v, s))
+                else:
+                    plains.extend(chain)
+                    chain = [(v, s)]
+            prev_end = e
+        plains.extend(chain)
+
+        if not groups:
+            return None
+        all_energies = [ev for g in groups for ev, _ in g]
+        if len(set(all_energies)) != len(all_energies):
+            return None  # 중복 에너지 → 애매
+
+        # 2) 이벤트 수 짝짓기
+        events_map: Optional[Dict[float, int]] = None
+        # 2a) "모두/각각/씩 N개" — 하나의 숫자를 모든 에너지에 적용
+        if len(plains) == 1 and re.search(r'모두|각각|씩|전부|다\s|all', text):
+            events_map = {ev: int(plains[0][0]) for ev in all_energies}
+        else:
+            # 2b) 첫 에너지 그룹 앞에 숫자가 있으면 순서가 애매 → 포기
+            if any(p_pos < groups[0][0][1] for _, p_pos in plains):
+                return None
+            # 각 그룹 구간(그룹 끝 ~ 다음 그룹 시작)에 plain 숫자가 정확히 1개일 때만 확정
+            # 그룹 멤버 전원이 그 숫자를 공유 ("1,2,3GeV 10000개" → 셋 다 10000)
+            bounds = [g[0][1] for g in groups] + [float('inf')]
+            events_map = {}
+            for i, g in enumerate(groups):
+                last_pos = g[-1][1]
+                seg = [v for v, p in plains if last_pos < p < bounds[i + 1]]
+                if len(seg) != 1:
+                    return None
+                for ev, _ in g:
+                    events_map[ev] = int(seg[0])
+
+        # 3) DAQ config 이름 배정: 첫 그룹 앞 → 전체(전역), 그룹 구간 안 → 그 그룹만
+        group_starts = [g[0][1] for g in groups]
+        global_cfg: Optional[str] = None
+        seg_cfgs: Dict[int, str] = {}
+        for name, pos in config_tokens:
+            if pos < group_starts[0]:
+                if global_cfg is not None:
+                    return None  # 전역 config 이름이 2개 → 애매
+                global_cfg = name
+            else:
+                gi = max(i for i, s in enumerate(group_starts) if s <= pos)
+                if gi in seg_cfgs:
+                    return None  # 한 구간에 config 이름이 2개 → 애매
+                seg_cfgs[gi] = name
+
+        pairs: Dict[float, tuple] = {}
+        for i, g in enumerate(groups):
+            cfg_name = seg_cfgs.get(i, global_cfg)
+            for ev, _ in g:
+                pairs[ev] = (events_map[ev], cfg_name)
+        return pairs
+
+    def _guard_update_state(self, updates: Dict[str, Any]) -> Optional[str]:
+        """STEP 0b config 파싱 방어 (2단계):
+        1) 코드가 GeV 앵커로 짝을 확정할 수 있으면 → LLM 파싱을 코드 값으로 자동 교정
+           (자릿수 오류·짝 뒤바뀜 모두 결정론적으로 해소, state-source-of-truth 패턴)
+        2) 애매해서 짝을 못 지으면 → 출처 검증(입력에 없는 숫자 거부)으로 폴백"""
+        if self.state.get("phase") != "config" or "energy_config" not in updates:
+            return None
+        ec = updates.get("energy_config")
+        if not isinstance(ec, dict):
+            return None
+
+        # ── 1) 자동 교정: 코드가 짝을 확정할 수 있는 경우 ──
+        pairs = self._parse_config_pairs(self._last_user_input)
+        if pairs:
+            corrected = {}
+            for e, (n, cfg_name) in pairs.items():
+                key = int(e) if e == int(e) else e
+                corrected[key] = {
+                    "target_events": n, "collected_events": 0,
+                    "runs": [], "completed": False, "completed_at": None,
+                }
+                if cfg_name:
+                    corrected[key]["config"] = cfg_name
+            llm_pairs = {}
+            for k, v in ec.items():
+                try:
+                    f = float(k)
+                    llm_pairs[int(f) if f == int(f) else f] = (v or {}).get("target_events") if isinstance(v, dict) else None
+                except (TypeError, ValueError):
+                    pass
+            code_pairs = {k: v["target_events"] for k, v in corrected.items()}
+            if llm_pairs != code_pairs:
+                self.log(f"energy_config 자동 교정(입력 짝 기준): LLM {llm_pairs} → {code_pairs}")
+            updates["energy_config"] = corrected
+            updates.pop("scan_order", None)  # _update_state가 재계산
+            return None
+
+        # ── 2) 폴백: 출처 검증 (입력에 등장하지 않는 숫자 거부) ──
+        allowed = self._numbers_in_last_input()
+        if not allowed:
+            return None  # 대조할 입력이 없으면 통과 (기존 동작 유지)
+        for energy_key, cfg in ec.items():
+            try:
+                e = float(energy_key)
+            except (TypeError, ValueError):
+                return f"REJECTED: energy key {energy_key!r} is not a number. Re-parse the user input."
+            if e not in allowed:
+                return (f"REJECTED: energy {energy_key} does not appear in the user's input. "
+                        f"Numbers in input: {sorted(allowed)}. Re-parse exactly — do not invent or drop digits.")
+            if isinstance(cfg, dict) and "target_events" in cfg:
+                try:
+                    n = float(cfg["target_events"])
+                except (TypeError, ValueError):
+                    return f"REJECTED: target_events {cfg['target_events']!r} is not a number. Re-parse the user input."
+                if n not in allowed:
+                    return (f"REJECTED: target_events {cfg['target_events']} does not appear in the user's input. "
+                            f"Numbers in input: {sorted(allowed)}. Re-parse exactly — do not invent or drop digits.")
+        return None
+
+    def _echo_parsed_config(self):
+        """config 파싱 직후, 코드가 state 진짓값으로 설정 내용을 echo (사용자 이중 확인용)."""
+        lines = ["설정을 다음과 같이 확인했습니다:"]
+        for energy in self.state.get("scan_order", []):
+            if energy is None:
+                continue
+            cfg = self.state["energy_config"].get(energy, {})
+            cfg_suffix = f" (config: {cfg['config']})" if cfg.get("config") else ""
+            lines.append(f"  • {energy} GeV — {format_event_count(cfg.get('target_events', 0))} events{cfg_suffix}")
+        self.io.send_ai_message("\n".join(lines))
+
     def _update_state(self, updates: Dict[str, Any]):
         """State 업데이트 (energy_config는 deep merge로 기존 필드 보존)"""
+        _was_config = self.state.get("phase") == "config"
         for key, value in updates.items():
             if key == "energy_config" and isinstance(value, dict):
                 for energy_key, config_value in value.items():
@@ -468,7 +666,11 @@ When ALL energies are completed, the SYSTEM sends the completion message and end
             else:
                 self.state[key] = value
                 self.log(f"State updated: {key} = {value}")
-    
+
+        # config → idle 전환(STEP 0b 완료) 시 파싱 결과를 코드가 echo
+        if _was_config and self.state.get("phase") == "idle" and self.state.get("energy_config"):
+            self._echo_parsed_config()
+
     def _extract_run_number(self, daq_output: str = None) -> Optional[int]:
         """Run number 추출 (runnum.txt → fallback: DAQ output 파싱)"""
         try:
@@ -505,11 +707,12 @@ When ALL energies are completed, the SYSTEM sends the completion message and end
             if energy is None:
                 continue
             config = self.state['energy_config'].get(energy, {})
+            cfg_suffix = f"   [{config['config']}]" if config.get('config') else ""
             if config.get('completed'):
                 runs_str = ', '.join(str(r) for r in config['runs']) if config['runs'] else '-'
-                lines.append(f"  ✅  {energy} GeV   {config['target_events']} events   Run {runs_str}")
+                lines.append(f"  ✅  {energy} GeV   {format_event_count(config['target_events'])} events   Run {runs_str}{cfg_suffix}")
             else:
-                lines.append(f"       {energy} GeV   {config.get('target_events',0)} events")
+                lines.append(f"       {energy} GeV   {format_event_count(config.get('target_events',0))} events{cfg_suffix}")
         lines.append("─" * 36)
         return "\n".join(lines)
 

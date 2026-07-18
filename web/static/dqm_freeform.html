@@ -256,6 +256,10 @@
             <option value="heatmap">heatmap</option>
             <option value="single">single</option>
             <option value="module">module</option>
+            <!-- AstroPix hitmap ONLY (no mapping/detector plots at all). For
+                 the hitmap ALONGSIDE the main DQM plots, keep Type as usual
+                 and check "Astro" under AUX instead. -->
+            <option value="Astro">Astro</option>
           </select>
           <label style="width:auto;margin-left:4px;">Method</label>
           <select id="inp-method">
@@ -274,29 +278,56 @@
           <label>MaxEvt</label>
           <input id="inp-maxevent" type="number" placeholder="(all)" />
         </div>
+        <div class="cmd-row" id="row-skipevent" style="display:none;">
+          <label>SkipEvt</label>
+          <input id="inp-skipevent" type="number" placeholder="0" />
+        </div>
         <div class="cmd-row">
           <label>AUXcut</label>
           <select id="opt-AUXcut">
             <option value="none" selected>none</option>
-            <option value="WC">WC only</option>
-            <option value="WCHodo">WC + hodo</option>
+            <option value="PID">PID only</option>
+            <option value="DWC">DWC only</option>
+            <option value="DWCPID">DWC + PID</option>
+            <!--
+              WC / WCHodo cuts are hidden this year — CERN has no wire
+              chamber. The C++ side (TBaux::IsPassing) still supports
+              them; uncomment if a WC becomes available again:
+              <option value="WC">WC only</option>
+              <option value="WCHodo">WC + hodo</option>
+            -->
+          </select>
+        </div>
+        <div class="cmd-row" id="row-particle" style="display:none;">
+          <label>Particle</label>
+          <select id="opt-particle">
+            <option value="none" selected>none</option>
+            <option value="PION">PION</option>
+            <option value="KAON">KAON</option>
+            <option value="PROTON">PROTON</option>
           </select>
         </div>
         <div class="cmd-flags">
           <label><input type="checkbox" id="flag-AUX" /> AUX</label>
-          <!--
-            AUX scope dropdown — only visible when --AUX is checked. Lets
-            the operator restrict AUX plots to one subsystem when the
-            other is physically absent (e.g. WC-only when hodoscope is
-            removed, so monit doesn't try to open MID 17 files).
-            Default 'WCHodo' matches the legacy 'plot both' behavior.
-          -->
-          <select id="opt-AUXMode" style="display:none;margin-left:6px;">
-            <option value="WCHodo" selected>WC + Hodo</option>
-            <option value="WC">WC only</option>
-            <option value="Hodo">Hodo only</option>
-          </select>
           <label><input type="checkbox" id="flag-LIVE" /> LIVE</label>
+        </div>
+        <!--
+          AUX scope checkboxes — only visible when --AUX is checked. Lets
+          the operator restrict AUX plots to whichever subsystems are
+          physically present this run (DWC not installed for a given run,
+          PID detectors not yet cabled), so monit doesn't try to
+          resolve/open MIDs for absent hardware. Serialized to a
+          comma-separated --AUXMode token list.
+
+          WC is hidden this year — CERN has no wire chamber. The C++ side
+          (TBaux) still supports it; uncomment to bring the checkbox back:
+          <label><input type="checkbox" id="auxmode-WC" /> WC</label>
+        -->
+        <div class="cmd-flags" id="auxmode-wrap" style="display:none;margin:-4px 0 6px 2px;">
+          <label title="Draws the TB2026 CERN square (29x29, 1mm) and round (2-layer, 0.5mm) hodoscope 2D hit maps, plus the legacy KEK 16x16 hodoscope if its channels are present in the loaded mapping."><input type="checkbox" id="auxmode-Hodo" /> Hodo</label>
+          <label><input type="checkbox" id="auxmode-DWC" checked /> DWC</label>
+          <label><input type="checkbox" id="auxmode-PID" checked /> PID</label>
+          <label title="Draws the AstroPix 35x35 2D hitmap using its own reader (TBAstroReader), run in a parallel thread alongside the main DQM plots above -- NOT part of --AUXMode (AstroPix does not use the channel mapping)."><input type="checkbox" id="auxmode-Astro" /> Astro</label>
         </div>
         <div class="cmd-preview">
           <span>Generated:</span> <span id="cmd-text"></span>
@@ -380,10 +411,16 @@ function toggleCmdSection() {
 
 const TYPE_META = {
   full:    { needsModule: false, methods: ['IntADC', 'PeakADC'], hint: '' },
-  heatmap: { needsModule: true,  methods: ['IntADC', 'PeakADC'], hint: 'SiPM 또는 MCPPMT' },
-  module:  { needsModule: true,  methods: ['IntADC', 'PeakADC'], hint: 'SiPM 또는 MCPPMT' },
-  single:  { needsModule: true,  methods: ['IntADC', 'PeakADC', 'Avg', 'Overlay'],
-             hint: 'T1 T2 T3 ... (공백 구분) 또는 T1-S T1-C 등 채널명' },
+  // heatmap only supports MCPPMT this year (TBplotengine::init() rejects
+  // any other --module value), so the Module row is hidden entirely and
+  // "MCPPMT" is forwarded automatically — see getParams().
+  heatmap: { needsModule: false, methods: ['IntADC', 'PeakADC'], hint: '' },
+  module:  { needsModule: true,  methods: ['IntADC', 'PeakADC'], hint: 'M1 M2 ... M9 (모듈 단위, 2x2 타워)' },
+  single:  { needsModule: true,  methods: ['IntADC', 'PeakADC', 'Avg', 'Overlay', 'Waveform'],
+             hint: 'M1-T1 M1-T2 ... (공백 구분) 또는 M1-T1-S M1-T1-C 등 채널명' },
+  // AstroPix-only run: no mapping, no --method distinction (TBmonit's
+  // LoopAstroOnly ignores it entirely) -- "Hitmap" is just a UI label.
+  Astro:   { needsModule: false, methods: ['Hitmap'], hint: '' },
 };
 
 function onTypeChange() {
@@ -403,7 +440,18 @@ function onTypeChange() {
   ).join('');
   if (!meta.methods.includes(cur)) sel.value = meta.methods[0];
 
+  syncMethodDependentUI();
   updatePreview();
+}
+
+// The SkipEvent field only makes sense for `--type single --method
+// Waveform` (event-by-event raw waveform dump); hide it otherwise so the
+// sidebar isn't cluttered for the vast majority of runs that don't use it.
+function syncMethodDependentUI() {
+  const type = document.getElementById('inp-type').value;
+  const method = document.getElementById('inp-method').value;
+  const isWaveform = type === 'single' && method === 'Waveform';
+  document.getElementById('row-skipevent').style.display = isWaveform ? '' : 'none';
 }
 
 function getParams() {
@@ -411,26 +459,41 @@ function getParams() {
   const type = document.getElementById('inp-type').value;
   const method = document.getElementById('inp-method').value;
   const moduleRaw = document.getElementById('inp-module').value.trim();
-  // Split space-separated module names → array
-  const modules = moduleRaw ? moduleRaw.split(/\s+/) : [];
+  // Split space-separated module names → array. heatmap only supports
+  // MCPPMT this year, so force it regardless of the (hidden) module
+  // field's contents — the operator never has to type it.
+  const modules = (type === 'heatmap') ? ['MCPPMT'] : (moduleRaw ? moduleRaw.split(/\s+/) : []);
   const maxEvt = parseInt(document.getElementById('inp-maxevent').value) || null;
+  const skipEvt = parseInt(document.getElementById('inp-skipevent').value) || null;
   const flags = [];
   ['AUX', 'LIVE'].forEach(f => {
     if (document.getElementById('flag-' + f).checked) flags.push(f);
   });
-  // AUXcut is now a 3-option dropdown: none / WC / WCHodo. Anything other
+  // "Astro" lives visually under the AUX-scope checkboxes (per the user's
+  // request to add it "in the AUX checkbox"), but it forwards as its own
+  // --Astro flag, NOT an --AUXMode token -- AstroPix uses a completely
+  // independent reader/thread, unrelated to --AUX/--AUXMode.
+  if (document.getElementById('auxmode-Astro').checked) flags.push('Astro');
+  // AUXcut dropdown: none / WC / WCHodo / DWC / DWCPID. Anything other
   // than 'none' turns on the AUXcut flag; the mode itself is forwarded as
   // a separate field so the server can pass --AUXCutMode through to monit.
   const auxCutMode = document.getElementById('opt-AUXcut').value;
   if (auxCutMode !== 'none') flags.push('AUXcut');
-  // AUX scope dropdown is only meaningful when --AUX is on. Default is
-  // 'WCHodo' (legacy behavior); when the operator picks WC or Hodo, we
-  // forward --AUXMode <value> so TBaux can skip loading the unused
-  // subsystem's MIDs.
-  const auxMode = document.getElementById('opt-AUXMode').value;
+  // Particle dropdown feeds --particle, consumed by the DWCPID cut mode.
+  const particleSel = document.getElementById('opt-particle').value;
+  const particle = particleSel !== 'none' ? particleSel : null;
+  // AUX scope checkboxes are only meaningful when --AUX is on. Serialize
+  // the checked subset into a comma-separated --AUXMode token list, e.g.
+  // "DWC,PID". TBaux::init() tokenizes this itself. WC is intentionally
+  // omitted here — no wire chamber at CERN this year (see auxmode-wrap).
+  const auxTokens = ['Hodo', 'DWC', 'PID'].filter(
+    t => document.getElementById('auxmode-' + t).checked
+  );
+  const auxMode = auxTokens.join(',');
   return {
     run_number: run, type, method, modules, max_event: maxEvt,
-    flags, aux_cut_mode: auxCutMode, aux_mode: auxMode,
+    skip_event: skipEvt, flags, aux_cut_mode: auxCutMode, aux_mode: auxMode,
+    particle,
   };
 }
 
@@ -440,25 +503,41 @@ function updatePreview() {
   let cmd = `./monit --RunNumber ${p.run_number} --type ${p.type} --method ${p.method}`;
   if (p.modules.length) cmd += ` --module ${p.modules.join(' ')}`;
   if (p.max_event) cmd += ` --MaxEvent ${p.max_event}`;
+  if (p.type === 'single' && p.method === 'Waveform' && p.skip_event) {
+    cmd += ` --SkipEvent ${p.skip_event}`;
+  }
   p.flags.forEach(f => cmd += ` --${f}`);
   if (p.aux_cut_mode && p.aux_cut_mode !== 'none') {
     cmd += ` --AUXCutMode ${p.aux_cut_mode}`;
   }
-  if (p.flags.includes('AUX') && p.aux_mode && p.aux_mode !== 'WCHodo') {
+  if (p.particle) cmd += ` --particle ${p.particle}`;
+  if (p.flags.includes('AUX') && p.aux_mode) {
     cmd += ` --AUXMode ${p.aux_mode}`;
   }
   document.getElementById('cmd-text').textContent = cmd;
 }
 
-// Show the AUX-scope dropdown only when --AUX is checked, so the side-
+// Show the AUX-scope checkboxes only when --AUX is checked, so the side-
 // bar doesn't get cluttered for runs that don't use AUX at all.
 (function wireAuxModeVisibility() {
   const cb = document.getElementById('flag-AUX');
-  const sel = document.getElementById('opt-AUXMode');
-  const sync = () => { sel.style.display = cb.checked ? '' : 'none'; };
+  const wrap = document.getElementById('auxmode-wrap');
+  const sync = () => { wrap.style.display = cb.checked ? '' : 'none'; };
   cb.addEventListener('change', sync);
   sync();
 })();
+
+// Show the particle dropdown only when a PID-consuming cut mode is
+// selected ('PID' or 'DWCPID') — --particle has no effect otherwise.
+(function wireParticleVisibility() {
+  const sel = document.getElementById('opt-AUXcut');
+  const row = document.getElementById('row-particle');
+  const sync = () => { row.style.display = (sel.value === 'PID' || sel.value === 'DWCPID') ? '' : 'none'; };
+  sel.addEventListener('change', sync);
+  sync();
+})();
+
+document.getElementById('inp-method').addEventListener('change', syncMethodDependentUI);
 
 document.querySelectorAll('#sidebar input, #sidebar select').forEach(el => {
   el.addEventListener('input', updatePreview);
@@ -503,10 +582,25 @@ function setBlockingMode(active) {
 function clearLog() {
   document.getElementById('live-log').textContent = '';
   _logOffset = 0;
+  _lastMainProgressEl = null;
+  _lastAstroProgressEl = null;
 }
 
-// Progress lines look like "2410 / 3003 events  0:03 left ..."
+// Main-loop progress lines look like "2410 / 3003 events  0:03 left ...".
+// The Astro thread (TBastro::Run, running in parallel -- see TBmonit's
+// --Astro handling) prints its own independent "Astro <i> / <n> events
+// (<pct> %)" lines, so it needs its own regex + its own tracked element to
+// overwrite; otherwise the two progress lines would stomp on each other
+// whenever they interleave in stdout.
 const _PROGRESS_RE = /^\s*\d+ \/ \d+ events/;
+const _ASTRO_PROGRESS_RE = /^\s*Astro \d+ \/ \d+ events/;
+
+// Track each kind's most recent progress <div> so it can be overwritten
+// in place no matter how many other lines (from the other thread) were
+// appended in between -- this is what keeps the two progress lines
+// independent instead of one clobbering the other.
+let _lastMainProgressEl = null;
+let _lastAstroProgressEl = null;
 
 function _appendLog(lines) {
   if (!lines.length) return;
@@ -514,17 +608,28 @@ function _appendLog(lines) {
   const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
 
   for (const line of lines) {
-    const isProgress = _PROGRESS_RE.test(line);
-    const last = el.lastElementChild;
-    if (isProgress && last && last.dataset.prog === '1') {
-      // overwrite the previous progress line in-place
-      last.textContent = line;
-    } else {
-      const div = document.createElement('div');
-      div.textContent = line;
-      if (isProgress) div.dataset.prog = '1';
-      el.appendChild(div);
+    const isAstroProgress = _ASTRO_PROGRESS_RE.test(line);
+    const isMainProgress = !isAstroProgress && _PROGRESS_RE.test(line);
+
+    if (isAstroProgress && _lastAstroProgressEl) {
+      _lastAstroProgressEl.textContent = line;
+      continue;
     }
+    if (isMainProgress && _lastMainProgressEl) {
+      _lastMainProgressEl.textContent = line;
+      continue;
+    }
+
+    const div = document.createElement('div');
+    div.textContent = line;
+    if (isAstroProgress) {
+      div.dataset.prog = 'astro';
+      _lastAstroProgressEl = div;
+    } else if (isMainProgress) {
+      div.dataset.prog = 'main';
+      _lastMainProgressEl = div;
+    }
+    el.appendChild(div);
   }
 
   if (atBottom) el.scrollTop = el.scrollHeight;
@@ -649,6 +754,11 @@ async function executeMonit() {
   // just LIVE. The server pushes lines into the same live-log deque
   // whether or not --LIVE was passed.
   logWrap.classList.add('visible');
+  // Fresh run -> forget any leftover progress-line elements from a
+  // previous run so the new run's first progress line always starts a
+  // new row instead of overwriting a stale one higher up in the log.
+  _lastMainProgressEl = null;
+  _lastAstroProgressEl = null;
   startLogPoll();
 
   // For non-LIVE: show the STOP button immediately so the user can abort
@@ -855,7 +965,7 @@ async function redrawWindow(id) {
   } catch (_) { /* swallow; resize-only redraw, not critical */ }
 }
 
-async function createPlotWindow(filename, canvasName, type, method, auxcut, runNum) {
+async function createPlotWindow(filename, canvasName, type, method, auxcut, runNum, kind) {
   _windowCounter += 1;
   const id = `plot-window-${_windowCounter}`;
 
@@ -897,9 +1007,18 @@ async function createPlotWindow(filename, canvasName, type, method, auxcut, runN
   el.addEventListener('mousedown', () => makeWindowActive(id));
   updateWindowCount();
 
+  const body = el.querySelector('.plot-window-body');
+
+  // Event-by-event raw waveform dumps aren't JSROOT canvases — they're a
+  // manifest listing one PNG per event. Render those as a simple
+  // prev/next image viewer instead of handing the file to JSROOT.
+  if (kind === 'waveform') {
+    await loadWaveformViewer(body, filename);
+    return;
+  }
+
   // Fetch JSON + draw. Errors are kept window-local instead of overwriting
   // the page title (previous behaviour) so other windows aren't disturbed.
-  const body = el.querySelector('.plot-window-body');
   try {
     const r = await fetch(`/dqm-output/${filename}?t=${Date.now()}`);
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -909,6 +1028,47 @@ async function createPlotWindow(filename, canvasName, type, method, auxcut, runN
     body.innerHTML = '';
     _windows.get(id).lastObj = obj;
     await JSROOT.draw(body, obj, '');
+  } catch (e) {
+    body.innerHTML = `<div class="plot-window-error">오류: ${e.message}</div>`;
+  }
+}
+
+// Renders the {"files":[...], "total": n} manifest written by
+// TBsingleWaveform as a lightweight prev/next PNG viewer inside a plot
+// window body. Each file entry is a path relative to the DQM output dir
+// (e.g. "waveforms/Run12345_SingleWaveform_evt42.png"), served straight
+// off the /dqm-output static mount.
+async function loadWaveformViewer(body, filename) {
+  try {
+    const r = await fetch(`/dqm-output/${filename}?t=${Date.now()}`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    const files = data.files || [];
+    if (!files.length) throw new Error('No waveform frames were generated');
+
+    let idx = 0;
+    body.innerHTML = `
+      <div style="display:flex;flex-direction:column;height:100%;background:#0f1117;">
+        <div style="flex:1;overflow:auto;display:flex;align-items:center;justify-content:center;padding:6px;">
+          <img class="wf-img" style="max-width:100%;max-height:100%;object-fit:contain;" />
+        </div>
+        <div style="flex-shrink:0;display:flex;align-items:center;justify-content:center;gap:10px;
+                    padding:6px;border-top:1px solid #2c2f3e;background:#1a1d27;">
+          <button class="wf-prev" style="padding:4px 10px;background:#2c2f3e;color:#dde1f0;border:none;border-radius:4px;cursor:pointer;">◀ Prev</button>
+          <span class="wf-counter" style="color:#7a7f99;font-size:11px;min-width:70px;text-align:center;"></span>
+          <button class="wf-next" style="padding:4px 10px;background:#2c2f3e;color:#dde1f0;border:none;border-radius:4px;cursor:pointer;">Next ▶</button>
+        </div>
+      </div>
+    `;
+    const img = body.querySelector('.wf-img');
+    const counter = body.querySelector('.wf-counter');
+    const render = () => {
+      img.src = `/dqm-output/${files[idx]}`;
+      counter.textContent = `Frame ${idx + 1} / ${files.length}`;
+    };
+    body.querySelector('.wf-prev').onclick = () => { idx = (idx - 1 + files.length) % files.length; render(); };
+    body.querySelector('.wf-next').onclick = () => { idx = (idx + 1) % files.length; render(); };
+    render();
   } catch (e) {
     body.innerHTML = `<div class="plot-window-error">오류: ${e.message}</div>`;
   }
@@ -1060,7 +1220,7 @@ async function loadRuns() {
         // button, or sweep them all with the sidebar's "Close All Canvases").
         item.onclick = (e) => {
           e.stopPropagation();
-          createPlotWindow(c.filename, c.canvas, c.type, c.method, c.auxcut, run.run_number);
+          createPlotWindow(c.filename, c.canvas, c.type, c.method, c.auxcut, run.run_number, c.kind);
         };
         canvasDiv.appendChild(item);
       });

@@ -4,6 +4,7 @@
 #include "TBread.h"
 #include "TButility.h"
 #include "TBaux.h"
+#include "TBastro.h"
 
 #include <stdexcept>
 #include <stdio.h>
@@ -14,6 +15,8 @@
 #include <chrono>
 #include <algorithm>
 #include <cctype>
+#include <memory>
+#include <thread>
 
 #include <mach/mach.h>
 #include <mach/vm_statistics.h>
@@ -41,6 +44,7 @@ TBmonit<T>::TBmonit(const std::string &fConfig_, int fRunNum_)
   fAuxCut  = false;
   fAuxCutMode = "WC";
   fAuxMode = "WCHodo";
+  fAstro = false;
   fDraw = false;
   fUtility = TButility();
 }
@@ -87,6 +91,7 @@ TBmonit<T>::TBmonit(ObjectCollection* fObj_)
   std::string auxModeArg;
   fObj->GetVariable("AUXMode", &auxModeArg);
   fAuxMode = (auxModeArg == "null" || auxModeArg.empty()) ? "WCHodo" : auxModeArg;
+  fObj->GetVariable("Astro", &fAstro);
   fObj->GetVariable("DRAW", &fDraw);
 
   fObj->GetVariable("particle", &fParticle);
@@ -140,14 +145,42 @@ void TBmonit<T>::GetFormattedRamInfo() {
 
 template <typename T>
 void TBmonit<T>::Loop() {
+  std::string aCase;
+  fObj->GetVariable("type", &aCase);
+
+  // "Astro"-only run needs none of the usual mapping/TBread/TBplotengine
+  // setup, so it's dispatched before the LIVE/after-run branch entirely.
+  if (aCase == "Astro") { LoopAstroOnly(); return; }
+
   if (fIsLive) LoopLive();
   else         LoopAfterRun();
+}
+
+template <typename T>
+void TBmonit<T>::LoopAstroOnly() {
+  if (fIsLive) {
+    std::cout << "[TBmonit] WARNING: '--type Astro' does not support --LIVE yet; "
+                  "running as a normal after-run job."
+              << std::endl;
+  }
+
+  TBastro astro(fConfig.GetConfig()["Astro"], fRunNum, fBaseDir);
+  astro.Run(fMaxEvent);
+  astro.Update();
 }
 
 template <typename T>
 void TBmonit<T>::LoopLive() {
 
   ANSI_CODE ANSI = ANSI_CODE();
+
+  if (fAstro) {
+    std::cout << ANSI.YELLOW + ANSI.BOLD
+              << "[TBmonit] WARNING: --Astro is not supported in --LIVE mode yet "
+                 "(TBAstroReader has no chunked/next-file-waiting support) -- "
+                 "skipping the AstroPix hitmap for this run."
+              << ANSI.END << std::endl;
+  }
 
   TBplotengine fPlotter = TBplotengine(fConfig.GetConfig()["ModuleConfig"], fRunNum, fIsLive, fDraw, fUtility);
   TBaux fAux = TBaux(fConfig.GetConfig()["AUX"], fRunNum, fAuxPlotting, fIsLive, fDraw, fUtility);
@@ -404,12 +437,31 @@ void TBmonit<T>::LoopAfterRun() {
       tUniqueMID
     );
 
+  // Save the originally-requested --MaxEvent (possibly -1 = "all") before
+  // it gets clamped to the main waveform reader's own total below. The
+  // AstroPix reader has a completely independent file set and event
+  // count, so it must resolve "-1" against its own total, not the main
+  // loop's.
+  const int fAstroRequestedMaxEvent = fMaxEvent;
 
   if (fMaxEvent == -1)
     fMaxEvent = readerWave.GetMaxEvent();
 
   if (fMaxEvent > readerWave.GetMaxEvent())
     fMaxEvent = readerWave.GetMaxEvent();
+
+  // ── AstroPix hitmap: independent reader, parallel thread ────────────────
+  // TBastro::Run() touches no ROOT object (see its header), so it is safe
+  // to execute concurrently with the ROOT-heavy main loop below. The two
+  // progress lines (this loop's "\r\033[F"-based one and TBastro's plain
+  // "Astro <i> / <n> events" one) interleave independently in stdout; the
+  // web UI's live-log viewer tags and overwrites each kind separately.
+  std::unique_ptr<TBastro> astro;
+  std::unique_ptr<std::thread> astroThread;
+  if (fAstro) {
+    astro = std::make_unique<TBastro>(fConfig.GetConfig()["Astro"], fRunNum, fBaseDir);
+    astroThread = std::make_unique<std::thread>(&TBastro::Run, astro.get(), fAstroRequestedMaxEvent);
+  }
 
   std::chrono::time_point time_begin = std::chrono::system_clock::now();
   for (int i = 0; i < fMaxEvent; i++) {
@@ -446,6 +498,11 @@ void TBmonit<T>::LoopAfterRun() {
   fPlotter.Update();
   if (fAuxPlotting)
     fAux.Update();
+
+  if (astroThread) {
+    astroThread->join();
+    astro->Update();
+  }
 }
 
 

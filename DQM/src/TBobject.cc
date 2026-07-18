@@ -88,6 +88,13 @@ ObjectCollection::ObjectCollection(int argc, char* argv[])
       AddVariable("AUXMode", fArgv[i]);
     }
 
+    // --Astro: draw the AstroPix 2D hitmap alongside the main DQM plots,
+    // using its own reader (TBAstroReader) in a parallel thread (see
+    // TBmonit::LoopAfterRun). Independent of --AUX/--AUXMode — AstroPix
+    // does not use the channel mapping at all.
+    if (fArgv[i] == "--Astro")
+      AddVariable("Astro", true);
+
     if (fArgv[i] == "--LIVE")
       AddVariable("LIVE", true);
 
@@ -110,33 +117,64 @@ bool ObjectCollection::Help() {
     std::cout << ANSI.BOLD << "------------------------------------------------------" << ANSI.END << std::endl;
 
     std::cout << ANSI.BOLD + ANSI.YELLOW + "  --type" + ANSI.END << " : what we want to draw" << std::endl;
-    std::cout << ANSI.BOLD + "    allowed type: " + ANSI.YELLOW + "'single', 'heatmap'" + ANSI.END << std::endl;
+    std::cout << ANSI.BOLD + "    allowed type: " + ANSI.YELLOW + "'single', 'full', 'module', 'heatmap', 'Astro'" + ANSI.END << std::endl;
     std::cout << "    eg) ./monit --RunNumver 9119 --type single"<< std::endl;
+    std::cout << ANSI.BOLD + "    'Astro' draws ONLY the AstroPix 2D hitmap (no mapping/--method needed);" + ANSI.END << std::endl;
+    std::cout << ANSI.BOLD + "    for the AstroPix map ALONGSIDE the main DQM plots, keep --type as usual" + ANSI.END << std::endl;
+    std::cout << ANSI.BOLD + "    and add --Astro instead (see below)." + ANSI.END << std::endl;
     std::cout << ANSI.BOLD << "------------------------------------------------------" << ANSI.END << std::endl;
 
     std::cout << ANSI.BOLD + ANSI.YELLOW + "  --method" + ANSI.END << " : which method for calculating ADC" << std::endl;
     std::cout << ANSI.BOLD + "    allowed method: " + ANSI.END << std::endl;
-    std::cout << ANSI.BOLD + "      --type single: " + ANSI.YELLOW + "'IntADC', 'PeakADC', 'Avg', 'Overlay'" + ANSI.END << std::endl;
-    std::cout << ANSI.BOLD + "      --type heatmap: " + ANSI.YELLOW + "'IntADC', 'PeakADC'" + ANSI.END << std::endl;
+    std::cout << ANSI.BOLD + "      --type single: " + ANSI.YELLOW + "'IntADC', 'PeakADC', 'Avg', 'Overlay', 'Waveform'" + ANSI.END << std::endl;
+    std::cout << ANSI.BOLD + "      --type full/module/heatmap: " + ANSI.YELLOW + "'IntADC', 'PeakADC'" + ANSI.END << std::endl;
     std::cout << "    eg) ./monit --RunNumver 9119 --type single --method IntADC" << std::endl;
     std::cout << ANSI.BOLD << "------------------------------------------------------" << ANSI.END << std::endl;
 
     std::cout << ANSI.BOLD + ANSI.YELLOW + "  Mandatory options for '--type single'" + ANSI.END << std::endl;
     std::cout << ANSI.BOLD + "    --module " + ANSI.YELLOW + "module name ..." + ANSI.END << std::endl;
-    std::cout << "    eg) ./monit --RunNumver 9119 --type single --method IntADC --module M1T1_S M1T1_C M1T2_S M1T2_C" << std::endl;
+    std::cout << "    eg) ./monit --RunNumver 9119 --type single --method IntADC --module M1-T1-S M1-T1-C M1-T2-S M1-T2-C" << std::endl;
+    std::cout << "    eg) ./monit --RunNumver 9119 --type single --method Waveform --module M1-T1-S M1-T1-C --SkipEvent 0 --MaxEvent 100" << std::endl;
     std::cout << ANSI.BOLD << "------------------------------------------------------" << ANSI.END << std::endl;
 
-    std::cout << ANSI.BOLD + ANSI.YELLOW + "  Mandatory options for '--method heatmap'" + ANSI.END << std::endl;
-    std::cout << ANSI.BOLD + "    --module " + ANSI.YELLOW + "'SiPM', 'MCPPMT'" + ANSI.END << std::endl;
-    std::cout << "    eg) ./monit --RunNumver 9119 --type heatmap --method IntADC --module SiPM" << std::endl;
+    std::cout << ANSI.BOLD + ANSI.YELLOW + "  Options for '--type module'" + ANSI.END << std::endl;
+    std::cout << ANSI.BOLD + "    --module " + ANSI.YELLOW + "M1..M9 (one module -> local 2x2 towers); omit for all 9 modules (6x6)" + ANSI.END << std::endl;
+    std::cout << "    eg) ./monit --RunNumver 9119 --type module --method IntADC --module M1" << std::endl;
+    std::cout << ANSI.BOLD << "------------------------------------------------------" << ANSI.END << std::endl;
+
+    std::cout << ANSI.BOLD + ANSI.YELLOW + "  Mandatory options for '--type heatmap'" + ANSI.END << std::endl;
+    std::cout << ANSI.BOLD + "    --module " + ANSI.YELLOW + "'MCPPMT'" + ANSI.END << std::endl;
+    std::cout << "    eg) ./monit --RunNumver 9119 --type heatmap --method IntADC --module MCPPMT" << std::endl;
     std::cout << ANSI.BOLD << "------------------------------------------------------" << ANSI.END << std::endl;
 
     std::cout << ANSI.BOLD + ANSI.YELLOW + "  if want to draw AUX info '--AUX'" + ANSI.END << std::endl;
-    std::cout << "    eg) ./monit --RunNumver 9119 --type heatmap --method IntADC --module SiPM --AUX" << std::endl;
+    std::cout << ANSI.BOLD + "    --AUXMode " + ANSI.YELLOW + "comma-separated subset of 'WC,Hodo,DWC,PID' (default WC,Hodo)" + ANSI.END << std::endl;
+    std::cout << "    eg) ./monit --RunNumver 9119 --type full --method IntADC --AUX --AUXMode DWC,PID" << std::endl;
+    std::cout << ANSI.BOLD + "    (the web UI hides 'WC' for CERN — no wire chamber this year — but the" + ANSI.END << std::endl;
+    std::cout << ANSI.BOLD + "     CLI/code path is kept; use --AUXMode WC or WCHodo directly if needed)" + ANSI.END << std::endl;
+    std::cout << ANSI.BOLD << "------------------------------------------------------" << ANSI.END << std::endl;
+
+    std::cout << ANSI.BOLD + ANSI.YELLOW + "  if want to apply an event-selection cut '--AUXcut'" + ANSI.END << std::endl;
+    std::cout << ANSI.BOLD + "    --AUXCutMode " + ANSI.YELLOW + "'PID' | 'DWC' | 'DWCPID'  (legacy: 'WC' | 'WCHodo')" + ANSI.END << std::endl;
+    std::cout << ANSI.BOLD + "      'PID'    : MC veto + PS/CC1/CC2 particle-ID cuts only (no position cut;" + ANSI.END << std::endl;
+    std::cout << ANSI.BOLD + "                 use this when DWC is unavailable)" + ANSI.END << std::endl;
+    std::cout << ANSI.BOLD + "      'DWC'    : DWC1<->DWC2 position/correlation cut only" + ANSI.END << std::endl;
+    std::cout << ANSI.BOLD + "      'DWCPID' : DWC cut + PID cut combined" + ANSI.END << std::endl;
+    std::cout << ANSI.BOLD + "    --particle " + ANSI.YELLOW + "'PION' | 'KAON' | 'PROTON' (used by 'PID'/'DWCPID'; optional)" + ANSI.END << std::endl;
+    std::cout << "    eg) ./monit --RunNumver 9119 --type full --method IntADC --AUXcut --AUXCutMode PID --particle PION" << std::endl;
+    std::cout << "    eg) ./monit --RunNumver 9119 --type full --method IntADC --AUXcut --AUXCutMode DWCPID --particle PION" << std::endl;
+    std::cout << ANSI.BOLD << "------------------------------------------------------" << ANSI.END << std::endl;
+
+    std::cout << ANSI.BOLD + ANSI.YELLOW + "  if want to draw the AstroPix 2D hitmap too '--Astro'" + ANSI.END << std::endl;
+    std::cout << ANSI.BOLD + "    Runs a separate AstroPix reader (TBAstroReader) in a parallel thread" + ANSI.END << std::endl;
+    std::cout << ANSI.BOLD + "    alongside the main event loop; independent of --AUX/--AUXMode and of" + ANSI.END << std::endl;
+    std::cout << ANSI.BOLD + "    the channel mapping. Not yet supported with --LIVE." + ANSI.END << std::endl;
+    std::cout << "    eg) ./monit --RunNumver 9119 --type full --method IntADC --Astro" << std::endl;
+    std::cout << ANSI.BOLD + "    Use '--type Astro' instead if you only want the AstroPix hitmap." + ANSI.END << std::endl;
     std::cout << ANSI.BOLD << "------------------------------------------------------" << ANSI.END << std::endl;
 
     std::cout << ANSI.BOLD + ANSI.YELLOW + "  if want to do live monitoring '--LIVE'" + ANSI.END << std::endl;
-    std::cout << "    eg) ./monit --RunNumver 9119 --type heatmap --method IntADC --module SiPM --LIVE" << std::endl;
+    std::cout << "    eg) ./monit --RunNumver 9119 --type heatmap --method IntADC --module MCPPMT --LIVE" << std::endl;
     std::cout << ANSI.BOLD << "------------------------------------------------------" << ANSI.END << std::endl;
 
     return true;

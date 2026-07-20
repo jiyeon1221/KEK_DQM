@@ -9,7 +9,7 @@ from typing import Dict, Any, Optional
 from pathlib import Path
 
 from .base_tool import BaseTool
-from .config_loader import get_path_config
+from .config_loader import get_path_config, get_run_log_beam_type
 from .hv_control_tool import HVControlTool
 from .hodoscope_hv_tool import read_hv_from_log
 
@@ -187,6 +187,8 @@ class RunLogTool(BaseTool):
         pos_rot = safe_round(params.get("pos_rot", ""))
         pos_tilt = safe_round(params.get("pos_tilt", ""))
         beam_energy = params.get("beam_energy", "")
+        # Beam Type: 요청에 beam_type이 있으면 우선, 없으면 config_general.yml의 RunLog.BeamType 사용
+        beam_type = params.get("beam_type") or get_run_log_beam_type()
 
         hv_drc = params.get("hv_drc", "")
         hv_aux = params.get("hv_aux", "")
@@ -234,7 +236,7 @@ class RunLogTool(BaseTool):
             'K': pos_v,
             'L': pos_rot,
             'M': pos_tilt,
-            'O': "e-",
+            'O': beam_type,
             'P': beam_energy,
             'Q': rate,
             'R': config,

@@ -207,7 +207,7 @@ def gen_daq_run() -> List[dict]:
         "{n} events please", "take {n} events", "collect {n} events",
         "{n} events 받아줘", "daq {n}", "{n} evt",
         "start daq with {n} events", "run daq {n}", "daq run {n} events",
-        "{n}k events 돌려줘", "run {n} evt please", "get {n} events",
+        "run {n} evt please", "get {n} events",
         "fire {n} events", "acquire {n} events", "run {n} evts",
         # 반말 / 채팅체
         "{n}개 받아", "{n}개 돌려", "데이터 {n}개", "{n}개 ㄱㄱ",
@@ -270,6 +270,26 @@ def gen_daq_run() -> List[dict]:
                 "reason": f"DAQ {events} 이벤트 수집",
             }
         examples.append(make_example(state, user_input, decision))
+
+    # k/천/만 단위 표기 — 단위를 곱한 값이 정답 (단위 무시를 학습하면 안 됨)
+    unit_cases = [
+        ("{m}k events 돌려줘", 1000, [10, 50, 100, 200, 300, 500]),
+        ("run {m}k events", 1000, [10, 50, 100, 200, 500]),
+        ("{m}천개 돌려줘", 1000, [1, 2, 5, 10, 50, 100]),
+        ("{m}만개 받아줘", 10000, [1, 2, 3, 5, 10, 30, 50]),
+        ("이벤트 {m}만개 수집해줘", 10000, [1, 5, 10, 20, 50]),
+    ]
+    for _ in range(15):
+        template, mult, m_choices = random.choice(unit_cases)
+        m_val = random.choice(m_choices)
+        events = m_val * mult
+        state = _make_state(random.random() > 0.3)
+        decision = {
+            "tool": "daq_run",
+            "params": {"events": events},
+            "reason": f"DAQ {events} 이벤트 수집",
+        }
+        examples.append(make_example(state, template.format(m=m_val), decision))
     return examples
 
 

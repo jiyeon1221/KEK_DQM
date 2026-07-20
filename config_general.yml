@@ -17,6 +17,10 @@ Paths:
   HodoscopeSetFile: "/Volumes/yhep/scratch/notice/test/TB_daq/config/setup/set_JBNU_DAQ_21.txt"
   DaqLogDir: "/Volumes/yhep/scratch/notice/test/TB_daq/log"
 
+# ===== Run Log 기본값 =====
+RunLog:
+  BeamType: "e+"
+
 # ===== Mac Studio SSH (LAN connection) =====
 StudioSSH:
   Host: "192.168.0.11"

@@ -9,7 +9,7 @@ import queue
 import traceback
 from typing import Dict, Any, Optional
 
-from agents.base_agent import BaseAgent
+from agents.base_agent import BaseAgent, _normalize_thousands_commas
 from agents.io_handler import WebSocketIO
 
 
@@ -219,6 +219,10 @@ class BrainAgent(BaseAgent):
         self._normalize_hv_params(tool_name, params)
         self._backfill_params(tool_name, params, user_input)
 
+        # 이벤트 수 자릿수 방어: LLM 값을 입력 원문 기준으로 검증/교정
+        if tool_name == "daq_run":
+            self._verify_daq_events(params, user_input)
+
         # "방금"/"이번"/"last"/"지금" → infer run_number from state instead of asking
         if tool_name == "dqm_plot" and not params.get("run_number"):
             if re.search(r'(방금|이번|last|지금)', user_input.lower()):
@@ -419,19 +423,53 @@ class BrainAgent(BaseAgent):
             return m.group(1)
         return None
 
-    @staticmethod
-    def _extract_events_from_text(text: str) -> Optional[int]:
+    _EVENT_UNITS = {"k": 1000, "천": 1000, "만": 10000}
+
+    @classmethod
+    def _extract_event_candidates(cls, text: str) -> list:
+        """입력에서 이벤트 수 후보를 우선순위로 추출.
+        1순위: 개/이벤트/event 표기가 붙은 숫자 (run number 등과 구분),
+        표기 붙은 숫자가 없으면 2순위로 나머지 숫자 전부."""
+        t = _normalize_thousands_commas(text)  # "100,000개" → "100000개"
+        marked, others = [], []
         # (?<![A-Za-z]) — "setup1" 같은 config 이름 속 숫자를 이벤트 수로 오인하지 않도록
-        m = re.search(r'(?<![A-Za-z])(\d+)\s*(k|천|만)?', text, re.IGNORECASE)
-        if not m:
-            return None
-        n = int(m.group(1))
-        unit = (m.group(2) or "").lower()
-        if unit == "k" or unit == "천":
-            n *= 1000
-        elif unit == "만":
-            n *= 10000
-        return n if n > 0 else None
+        for m in re.finditer(r'(?<![A-Za-z])(\d+)\s*(k|천|만)?', t, re.IGNORECASE):
+            n = int(m.group(1)) * cls._EVENT_UNITS.get((m.group(2) or "").lower(), 1)
+            if n <= 0:
+                continue
+            tail = t[m.end():m.end() + 12]
+            head = t[max(0, m.start() - 12):m.start()]
+            is_marked = bool(re.match(r'\s*(개|이벤트|events?|evts?)', tail, re.IGNORECASE)) \
+                or bool(re.search(r'(이벤트|events?|evts?)\s*$', head, re.IGNORECASE))
+            (marked if is_marked else others).append(n)
+        return marked if marked else others
+
+    @classmethod
+    def _extract_events_from_text(cls, text: str) -> Optional[int]:
+        cands = cls._extract_event_candidates(text)
+        return cands[0] if cands else None
+
+    def _verify_daq_events(self, params: dict, user_input: str) -> None:
+        """LLM이 넣은 events를 사용자 입력 기준으로 검증/교정 (자릿수 오류 방어).
+        입력에서 후보가 유일하면 그 값으로 확정. 후보가 여러 개인데 LLM 값이
+        그중 어느 것도 아니면(지어낸/자릿수 틀린 숫자) events를 비워 되묻는다."""
+        cands = self._extract_event_candidates(user_input)
+        if not cands:
+            return  # 입력에 숫자 없음 (예: "DAQ 돌려줘") → 기존 흐름(되묻기) 유지
+        ev = params.get("events")
+        if len(set(cands)) == 1:
+            true_val = cands[0]
+            if ev != true_val:
+                self.log(f"[Brain] events 자동 교정(입력 기준): LLM {ev!r} → {true_val}")
+                params["events"] = true_val
+            return
+        try:
+            if ev is not None and int(ev) in cands:
+                return  # 입력에 등장한 숫자 → 신뢰
+        except (TypeError, ValueError):
+            pass
+        self.log(f"[Brain] events {ev!r}가 입력 숫자 {cands}와 불일치 — 되묻기")
+        params["events"] = None
 
     @staticmethod
     def _extract_modules_from_text(text: str) -> list:

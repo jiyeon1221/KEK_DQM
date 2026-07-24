@@ -258,8 +258,14 @@
             <option value="module">module</option>
             <!-- AstroPix hitmap ONLY (no mapping/detector plots at all). For
                  the hitmap ALONGSIDE the main DQM plots, keep Type as usual
-                 and check "Astro" under AUX instead. -->
+                 and check "Astro" under AUX instead.
+                 Deactivated for now — DWC is the position detector in use
+                 this run, AstroPix hardware isn't needed. TBmonit's
+                 LoopAstroOnly still fully supports this; uncomment to
+                 bring it back (also uncomment the matching TYPE_META.Astro
+                 entry below).
             <option value="Astro">Astro</option>
+            -->
           </select>
           <label style="width:auto;margin-left:4px;">Method</label>
           <select id="inp-method">
@@ -322,12 +328,20 @@
           WC is hidden this year — CERN has no wire chamber. The C++ side
           (TBaux) still supports it; uncomment to bring the checkbox back:
           <label><input type="checkbox" id="auxmode-WC" /> WC</label>
+
+          Hodo and Astro are deactivated for now — DWC is the position
+          detector actually in use this run, so the hodoscope and
+          AstroPix hardware aren't needed. Both are still fully supported
+          on the C++ side (TBaux::FillSquareHodoscope/FillRoundHodoscope/
+          FillHodoscope, TBastro/TBAstroReader); uncomment these two
+          checkboxes AND put 'Hodo' back into the auxTokens list / restore
+          the auxmode-Astro flags.push() below to bring them back:
+          <label title="Draws the TB2026 CERN square (29x29, 1mm) and round (2-layer, 0.5mm) hodoscope 2D hit maps, plus the legacy KEK 16x16 hodoscope if its channels are present in the loaded mapping."><input type="checkbox" id="auxmode-Hodo" /> Hodo</label>
+          <label title="Draws the AstroPix 35x35 2D hitmap using its own reader (TBAstroReader), run in a parallel thread alongside the main DQM plots above -- NOT part of --AUXMode (AstroPix does not use the channel mapping)."><input type="checkbox" id="auxmode-Astro" /> Astro</label>
         -->
         <div class="cmd-flags" id="auxmode-wrap" style="display:none;margin:-4px 0 6px 2px;">
-          <label title="Draws the TB2026 CERN square (29x29, 1mm) and round (2-layer, 0.5mm) hodoscope 2D hit maps, plus the legacy KEK 16x16 hodoscope if its channels are present in the loaded mapping."><input type="checkbox" id="auxmode-Hodo" /> Hodo</label>
           <label><input type="checkbox" id="auxmode-DWC" checked /> DWC</label>
           <label><input type="checkbox" id="auxmode-PID" checked /> PID</label>
-          <label title="Draws the AstroPix 35x35 2D hitmap using its own reader (TBAstroReader), run in a parallel thread alongside the main DQM plots above -- NOT part of --AUXMode (AstroPix does not use the channel mapping)."><input type="checkbox" id="auxmode-Astro" /> Astro</label>
         </div>
         <div class="cmd-preview">
           <span>Generated:</span> <span id="cmd-text"></span>
@@ -420,7 +434,9 @@ const TYPE_META = {
              hint: 'M1-T1 M1-T2 ... (공백 구분) 또는 M1-T1-S M1-T1-C 등 채널명' },
   // AstroPix-only run: no mapping, no --method distinction (TBmonit's
   // LoopAstroOnly ignores it entirely) -- "Hitmap" is just a UI label.
-  Astro:   { needsModule: false, methods: ['Hitmap'], hint: '' },
+  // Deactivated along with the "Astro" <option> above; uncomment both to
+  // bring this type back.
+  // Astro:   { needsModule: false, methods: ['Hitmap'], hint: '' },
 };
 
 function onTypeChange() {
@@ -473,7 +489,9 @@ function getParams() {
   // request to add it "in the AUX checkbox"), but it forwards as its own
   // --Astro flag, NOT an --AUXMode token -- AstroPix uses a completely
   // independent reader/thread, unrelated to --AUX/--AUXMode.
-  if (document.getElementById('auxmode-Astro').checked) flags.push('Astro');
+  // Deactivated along with the auxmode-Astro checkbox above (DWC is the
+  // position detector in use this run); uncomment both to bring it back.
+  // if (document.getElementById('auxmode-Astro').checked) flags.push('Astro');
   // AUXcut dropdown: none / WC / WCHodo / DWC / DWCPID. Anything other
   // than 'none' turns on the AUXcut flag; the mode itself is forwarded as
   // a separate field so the server can pass --AUXCutMode through to monit.
@@ -486,7 +504,11 @@ function getParams() {
   // the checked subset into a comma-separated --AUXMode token list, e.g.
   // "DWC,PID". TBaux::init() tokenizes this itself. WC is intentionally
   // omitted here — no wire chamber at CERN this year (see auxmode-wrap).
-  const auxTokens = ['Hodo', 'DWC', 'PID'].filter(
+  // Hodo is also omitted for now — DWC is the position detector actually
+  // in use this run, so the hodoscope isn't needed. TBaux still fully
+  // supports it; uncomment the auxmode-Hodo checkbox above and add
+  // 'Hodo' back to this list to bring it back.
+  const auxTokens = ['DWC', 'PID'].filter(
     t => document.getElementById('auxmode-' + t).checked
   );
   const auxMode = auxTokens.join(',');

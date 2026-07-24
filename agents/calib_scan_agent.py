@@ -9,7 +9,7 @@ from datetime import datetime
 
 from tools.daq_tool import DAQRunTool
 
-from .base_agent import BaseAgent
+from .base_agent import BaseAgent, format_event_count, extract_number_tokens
 sys.path.append(str(Path(__file__).parent.parent))
 from config import AGENT_MODELS, MSG_PLOT_CONFIRM
 
@@ -229,8 +229,47 @@ When ALL towers are completed, the SYSTEM sends the completion message and ends 
         )
         self.state["current_tower_idx"] = completed_count
 
+    def _guard_update_state(self, updates: Dict[str, Any]) -> Optional[str]:
+        """STEP 0 config 파싱 방어 (2단계):
+        1) 입력에서 값을 하나로 확정할 수 있으면 → LLM 파싱을 코드 값으로 자동 교정
+           - beam_energy: GeV 앵커 숫자 (없으면 입력의 유일한 숫자)
+           - target_events: GeV 앵커가 아닌 유일한 숫자
+           '3GeV 10000개'를 한 턴에 답해 beam_energy=10000으로 뒤바뀌는 것도 여기서 교정.
+        2) 확정 불가(후보 여러 개)면 → 출처 검증(입력에 없는 숫자 거부)으로 폴백"""
+        tokens = extract_number_tokens(self._last_user_input)
+        if not tokens:
+            return None  # 대조할 입력이 없으면 통과 (기존 동작 유지)
+        energies = [v for v, _, _, is_e in tokens if is_e]
+        plains = [v for v, _, _, is_e in tokens if not is_e]
+
+        for key, candidates, cast in (
+            ("beam_energy", energies if energies else plains, lambda x: int(x) if x == int(x) else x),
+            ("target_events", plains, int),
+        ):
+            # 최초 설정(config 단계)만 방어 — 이후엔 _ONCE_SET_PROTECTED가 변경 자체를 막는다
+            if key not in updates or updates[key] is None or self.state.get(key) is not None:
+                continue
+            # ── 1) 자동 교정: 후보가 정확히 1개면 코드 값으로 확정 ──
+            if len(candidates) == 1:
+                true_val = cast(candidates[0])
+                if updates[key] != true_val:
+                    self.log(f"{key} 자동 교정(입력 기준): LLM {updates[key]!r} → {true_val!r}")
+                    updates[key] = true_val
+                continue
+            # ── 2) 폴백: 출처 검증 ──
+            try:
+                v = float(updates[key])
+            except (TypeError, ValueError):
+                return f"REJECTED: {key} {updates[key]!r} is not a number. Re-parse the user input."
+            allowed = {t for t, _, _, _ in tokens}
+            if v not in allowed:
+                return (f"REJECTED: {key} {updates[key]} does not appear in the user's input. "
+                        f"Numbers in input: {sorted(allowed)}. Re-parse exactly — do not invent or drop digits.")
+        return None
+
     def _update_state(self, updates: Dict[str, Any]):
         """State 업데이트"""
+        _events_before = self.state.get("target_events")
         for key, value in updates.items():
             if key == "tower_status" and isinstance(value, dict):
                 for t, v in value.items():
@@ -258,6 +297,14 @@ When ALL towers are completed, the SYSTEM sends the completion message and ends 
             else:
                 self.state[key] = value
                 self.log(f"State updated: {key} = {value}")
+
+        # config 완료(target_events 최초 설정) 시 설정 내용을 코드가 echo (사용자 이중 확인용)
+        if _events_before is None and self.state.get("target_events") is not None:
+            self.io.send_ai_message(
+                f"설정을 다음과 같이 확인했습니다:\n"
+                f"  • Beam Energy: {self.state.get('beam_energy')} GeV\n"
+                f"  • Target Events: {format_event_count(self.state['target_events'])} / tower"
+            )
 
     def _position_for_current_step(self) -> Optional[Dict[str, float]]:
         """current_tower_idx 기준 — 타워마다 x/y가 다름."""
@@ -363,7 +410,7 @@ When ALL towers are completed, the SYSTEM sends the completion message and ends 
         """현재 진행 상황 요약 출력 (CLI용)"""
         print(f"\n📊 Calibration Progress Summary:")
         print("-" * 70)
-        print(f"Energy: {self.state['beam_energy']} GeV | Target: {self.state['target_events']} events/tower")
+        print(f"Energy: {self.state['beam_energy']} GeV | Target: {format_event_count(self.state['target_events'])} events/tower")
         print("-" * 70)
         for i, tower in enumerate(self.tower_order):
             status = self.state['tower_status'][tower]

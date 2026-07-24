@@ -93,7 +93,7 @@ AGENT_DEFAULTS: dict[str, dict] = {
     },
     "energy_scan": {
         "data_file": "EM_scan_data.json",
-        "epochs":    5,
+        "epochs":    3,
         "lora_r":    16,
         "lora_alpha":32,
         "lr":        2e-4,
@@ -120,7 +120,7 @@ AGENT_DEFAULTS: dict[str, dict] = {
     },
     "brain": {
         "data_file": "brain_data.json",
-        "epochs":    4,
+        "epochs":    3,
         "lora_r":    32,
         "lora_alpha":64,
         "lr":        5e-5,

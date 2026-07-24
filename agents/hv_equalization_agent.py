@@ -88,6 +88,9 @@ class HVEqualizationAgent(BaseAgent):
             "y_confirmed": False,
             "needs_suggest": False,
             "needs_plot_confirm": False,
+            # 승인 단계에서 사용자가 실제로 '완료'를 눌렀는지(코드가 판정).
+            # phase=="approving"만으로 voltage 적용을 강제하면 수동 조정 입력이 무시된다.
+            "approval_confirmed": False,
         }
         self.log(f"Agent 초기화: {tower}, E={beam_energy}GeV, Events={target_events}, Target ADC={target_adc}")
 
@@ -126,9 +129,9 @@ The SYSTEM marks position confirmed automatically — do NOT output any state up
 
 1e. Ask approval (only NOT-done channels):
   Both not done: {{"message": "분석 결과, 현재 ADC: {t}C=<adc_c>, {t}S=<adc_s> (목표: <target>). HV 변경 제안: {t}C <old_c>V→<new_c>V, {t}S <old_s>V→<new_s>V. 적용하시겠습니까?", "update_state": {{"phase": "approving"}}}}
-  Only C not done: {{"message": "분석 결과, 현재 ADC: {t}C=<adc_c> (목표: <target>). HV 변경 제안: {t}C <old_c>V→<new_c>V. ({t}S 완료) 적용하시겠습니까?", "update_state": {{"phase": "approving"}}}}
-  Only S not done: {{"message": "분석 결과, 현재 ADC: {t}S=<adc_s> (목표: <target>). HV 변경 제안: {t}S <old_s>V→<new_s>V. ({t}C 완료) 적용하시겠습니까?", "update_state": {{"phase": "approving"}}}}
-  CRITICAL: Copy the "현재→제안" arrow (e.g. C 775V→785V) EXACTLY from the state's "HV 변경 제안" line — keep the old→new order, do NOT swap the two numbers. Use EXACT ADC values (last_adc_c/s). NEVER fabricate numbers.
+  Only C not done: {{"message": "분석 결과, 현재 ADC: {t}C=<adc_c> (목표: <target>). HV 변경 제안: {t}C <old_c>V→<new_c>V, {t}S 완료(변경 없음). 적용하시겠습니까?", "update_state": {{"phase": "approving"}}}}
+  Only S not done: {{"message": "분석 결과, 현재 ADC: {t}S=<adc_s> (목표: <target>). HV 변경 제안: {t}C 완료(변경 없음), {t}S <old_s>V→<new_s>V. 적용하시겠습니까?", "update_state": {{"phase": "approving"}}}}
+  CRITICAL: Copy the state's "HV 변경 제안" line EXACTLY, always in C-then-S order. Keep each arrow's old→new order (do NOT swap the two numbers). A done channel appears as "완료(변경 없음)" in its own C/S slot — NEVER relabel which channel is done. Use EXACT ADC values (last_adc_c/s). NEVER fabricate numbers.
   If user requests manual HV adjustment (e.g. "C를 800으로", "S 10 올려줘"):
     Update suggested values via update_state and re-send approval message:
     {{"message": "...(updated approval)...", "update_state": {{"last_suggested_hv_c": <new_c>, "last_suggested_hv_s": <new_s>}}}}
@@ -174,7 +177,7 @@ After user says "완료":
                 return f"{base} | REQUIRED NEXT: hv_execute_tool status (step 1b — position confirmed)"
         elif adc_known and done_c and done_s:
             return f"{base} | CONVERGED → call hv_equalization_done_channel (step 1h)"
-        elif adc_known and suggest_pending and phase == "approving":
+        elif adc_known and suggest_pending and self.state.get("approval_confirmed"):
             return f"{base} | REQUIRED NEXT: hv_execute_tool voltage (step 1f — user already confirmed)"
         elif adc_known and suggest_pending:
             return f"{base} | REQUIRED NEXT: approval message (step 1e)"
@@ -217,12 +220,12 @@ After user says "완료":
             target = self.state.get("target_adc_c")
             if done_c and done_s:
                 lines.append(f"*** CONVERGENCE: C=True, S=True — CALL hv_equalization_done_channel NOW ***")
-            elif suggest_pending and phase == "approving":
+            elif suggest_pending and self.state.get("approval_confirmed"):
                 lines.append(f"*** CONVERGENCE: C={done_c}, S={done_s} | ADC: C={adc_c:.1f}, S={adc_s:.1f} | Target: {target} ***")
-                lines.append(f"*** REQUIRED NEXT: hv_execute_tool voltage (step 1f) ***")
+                lines.append(f"*** REQUIRED NEXT: hv_execute_tool voltage (step 1f) — user confirmed ***")
             elif suggest_pending:
                 lines.append(f"*** CONVERGENCE: C={done_c}, S={done_s} | ADC: C={adc_c:.1f}, S={adc_s:.1f} | Target: {target} ***")
-                lines.append(f"*** REQUIRED NEXT: approval message (step 1e) ***")
+                lines.append(f"*** REQUIRED NEXT: approval message (step 1e) — if user gave manual HV values, update last_suggested_hv_c/s and re-send approval ***")
             else:
                 lines.append(f"*** CONVERGENCE: C={done_c}, S={done_s} | ADC: C={adc_c:.1f}, S={adc_s:.1f} | Target: {target} ***")
                 lines.append(f"*** REQUIRED NEXT: daq_run_tool (step 1c) ***")
@@ -240,8 +243,8 @@ After user says "완료":
             ds = self.state.get("channel_done_s", False)
             oc, nc = self.state.get("last_hv_c"), self.state["last_suggested_hv_c"]
             os_, ns = self.state.get("last_hv_s"), self.state["last_suggested_hv_s"]
-            c_str = "C 완료" if dc else f"C {oc:.0f}V→{nc}V"
-            s_str = "S 완료" if ds else f"S {os_:.0f}V→{ns}V"
+            c_str = "C 완료(변경 없음)" if dc else f"C {oc:.0f}V→{nc}V"
+            s_str = "S 완료(변경 없음)" if ds else f"S {os_:.0f}V→{ns}V"
             lines.append(f"HV 변경 제안 (현재→제안, 이 화살표를 그대로 승인 메시지에 복사): {c_str}, {s_str}")
         if self.state.get("last_run_number"):
             lines.append(f"Last Run Number: {self.state['last_run_number']}")
@@ -342,6 +345,7 @@ After user says "완료":
                     self.state["last_suggested_hv_s"] = None
                     self.state["last_adc_c"] = None
                     self.state["last_adc_s"] = None
+                    self.state["approval_confirmed"] = False  # 다음 승인 라운드용 리셋
 
                     self.io.send_tool_output(f"🔍 HV 적용 확인 중 ({self.tower})...")
                     try:
@@ -492,6 +496,7 @@ After user says "완료":
         "iterations", "done",
         "needs_suggest",
         "y_confirmed",  # 위치 확인은 코드 소유 (_on_user_input)
+        "approval_confirmed",  # 승인 확인은 코드 소유 (_on_user_input)
     })
 
     def _update_state(self, updates: Dict[str, Any]):
@@ -511,6 +516,21 @@ After user says "완료":
         # 단일 타워 — done_channel 실행 시 state['done']=True (runner가 타워를 순회)
         return bool(self.state.get("done"))
 
+    # 순수 확인 응답에 나타나는 단어들. 수동 HV 조정 입력은 항상 숫자를 포함하므로
+    # (예: "C 850 S 850", "C 300 올리고 S는 850으로") 숫자가 있으면 확인이 아니다.
+    _CONFIRM_WORDS = (
+        "완료", "네", "예", "확인", "적용", "응", "그래", "좋아", "진행",
+        "ok", "okay", "yes", "y", "apply", "confirm",
+    )
+
+    def _is_confirmation(self, text: str) -> bool:
+        t = (text or "").strip().lower()
+        if not t:
+            return False
+        if any(ch.isdigit() for ch in t):
+            return False  # 숫자 포함 → 수동 조정 요청
+        return any(w in t for w in self._CONFIRM_WORDS)
+
     def _on_user_input(self, user_input: str):
         # 이동 확인
         if (not self.state.get("y_confirmed")
@@ -523,6 +543,21 @@ After user says "완료":
             self.state["needs_plot_confirm"] = False
             self.state["needs_suggest"] = True
             self.log("Plot confirmed → proceed to hv_equalization_suggest")
+            return
+        # 승인 단계(제안 존재 + ADC 측정됨): 사용자가 '완료'로 승인했는지,
+        # 아니면 수동 HV 조정을 요청했는지 판정한다.
+        # - 확인(완료 등) → approval_confirmed=True → step 1f(voltage 적용)
+        # - 수동 조정(숫자 포함) → approval_confirmed=False → step 1e 재진입해
+        #   LLM이 last_suggested_hv_c/s를 갱신하고 승인 메시지를 재전송하게 둔다.
+        if (self.state.get("last_suggested_hv_c") is not None
+                and self.state.get("last_adc_c") is not None):
+            if self._is_confirmation(user_input):
+                self.state["approval_confirmed"] = True
+                self.log("HV 승인 확인됨 → voltage 적용 (step 1f)")
+            else:
+                self.state["approval_confirmed"] = False
+                self.log(f"승인 단계 수동 조정 요청 감지: '{user_input}' → 승인 메시지 재전송 (step 1e)")
+            return
 
     def _guard_tool(self, tool_name: str, decision: Dict[str, Any]) -> Optional[str]:
         # plot confirm 필요 시 DAQ/suggest/hv 차단
@@ -544,3 +579,43 @@ After user says "완료":
         if MSG_PLOT_CONFIRM in message and not self.state.get("needs_plot_confirm"):
             return f"needs_plot_confirm=False — DO NOT send plot confirmation before DAQ runs. {self._get_step_hint()}"
         return None
+
+    def _build_approval_message(self) -> Optional[str]:
+        """승인 메시지(step 1e)를 state로부터 결정론적으로 생성한다.
+        실제 적용 전압은 state.last_suggested_hv_*에서 나오므로(LLM 출력 무시),
+        화면 메시지도 반드시 state와 일치해야 '보이는 값 = 적용되는 값'이 보장된다.
+        LLM이 자주 C/S done 라벨을 뒤바꾸거나 done 채널을 x→x 화살표로 렌더링하는
+        문제를 근본 차단한다. 승인 단계가 아니면 None."""
+        adc_c = self.state.get("last_adc_c")
+        adc_s = self.state.get("last_adc_s")
+        nc = self.state.get("last_suggested_hv_c")
+        ns = self.state.get("last_suggested_hv_s")
+        if adc_c is None or nc is None:
+            return None
+        t = self.tower
+        dc = self.state.get("channel_done_c", False)
+        ds = self.state.get("channel_done_s", False)
+        if dc and ds:
+            return None  # 둘 다 완료 → 승인 메시지 없음 (done_channel로)
+        oc = self.state.get("last_hv_c")
+        os_ = self.state.get("last_hv_s")
+        target = self.state.get("target_adc_c")
+        c_part = f"{t}C 완료(변경 없음)" if dc else f"{t}C {oc:.0f}V→{nc}V"
+        s_part = f"{t}S 완료(변경 없음)" if ds else f"{t}S {os_:.0f}V→{ns}V"
+        if not dc and not ds:
+            adc_part = f"{t}C={adc_c:.1f}, {t}S={adc_s:.1f}"
+        elif dc:  # C 완료, S만 조정
+            adc_part = f"{t}S={adc_s:.1f}"
+        else:     # S 완료, C만 조정
+            adc_part = f"{t}C={adc_c:.1f}"
+        return (f"분석 결과, 현재 ADC: {adc_part} (목표: {target}). "
+                f"HV 변경 제안: {c_part}, {s_part}. 적용하시겠습니까?")
+
+    def _finalize_ai_message(self, message: str) -> str:
+        # 승인 메시지는 LLM 텍스트를 신뢰하지 않고 state 기준으로 재구성한다.
+        if "적용하시겠습니까" in message:
+            canonical = self._build_approval_message()
+            if canonical and canonical != message:
+                self.log(f"승인 메시지 보정(state 기준): {message!r} → {canonical!r}")
+                return canonical
+        return super()._finalize_ai_message(message)

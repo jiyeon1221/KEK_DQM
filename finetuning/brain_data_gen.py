@@ -17,7 +17,12 @@ SYSTEM_PROMPT = """You are the Brain Agent for a test beam experiment (KEK/CERN)
 Your job is to interpret the operator's ad-hoc request and call the right tool.
 
 Available tools:
-- daq_run: Run DAQ data collection. params: {"events": int}
+- daq_run: Run DAQ data collection. params: {"events": int, "config": str (optional)}
+  - config is the DAQ config name passed to the run script. It can be ANY name the user says
+    (e.g. "test", "setup", "setup1", "config1", "physics", ...). Default is "setup" —
+    OMIT config unless the user explicitly names one
+    (e.g. "setup1으로 10000개", "config1 설정으로", "test로 돌려줘").
+    Copy the name EXACTLY as the user wrote it — never invent or normalize it.
 - dqm_plot: Generate DQM plots for a run and display in the DQM panel.
   params: {"run_number": int, "method": "IntADC"|"PeakADC", "type": "full"|"heatmap"|"single", "modules": [list]}
   - type defaults to "full" (all towers + heatmap). No modules needed for full.
@@ -76,6 +81,8 @@ RULES:
    If the request names a channel subset (짝수/홀수/C/S/타워/모듈/채널명/슬롯), pass it in "channels" just like hv_write;
    otherwise omit "channels" to read ALL channels.
 6. DAQ requires an event count. If the user says "DAQ 돌려줘" without a number, ask how many events.
+   If the user names a DAQ config (test, setup1, config1 등 — 어떤 이름이든), put it in "config";
+   otherwise OMIT config (default "setup").
 7. Channel names like M1T1C, M1T1S, M2T3C, ... are HV channels (format: M{1-9}T{1-4}{C,S}) — NOT log columns.
    A SINGLE channel name + voltage → channels: [that single channel].
    ONLY use channels: "all" when the input explicitly says 전체/모든/전 채널/all channels.
@@ -200,7 +207,7 @@ def gen_daq_run() -> List[dict]:
         "{n} events please", "take {n} events", "collect {n} events",
         "{n} events 받아줘", "daq {n}", "{n} evt",
         "start daq with {n} events", "run daq {n}", "daq run {n} events",
-        "{n}k events 돌려줘", "run {n} evt please", "get {n} events",
+        "run {n} evt please", "get {n} events",
         "fire {n} events", "acquire {n} events", "run {n} evts",
         # 반말 / 채팅체
         "{n}개 받아", "{n}개 돌려", "데이터 {n}개", "{n}개 ㄱㄱ",
@@ -227,17 +234,62 @@ def gen_daq_run() -> List[dict]:
         "start data taking {n} events", "{n} events now",
         "please collect {n} events", "take data {n} events",
     ]
+    # config 명시 케이스 — 사용자가 config 이름을 말하면 params에 "config" 포함
+    config_templates = [
+        "{cfg}로 {n}개 돌려줘", "{cfg}으로 {n}개 받아줘", "config {cfg}로 {n}개",
+        "{cfg} 설정으로 {n}개 수집해줘", "{cfg} config으로 {n} events",
+        "run {n} events with {cfg}", "{cfg}으로 {n} events 돌려",
+        "컨피그 {cfg}로 {n}개", "{cfg} 셋업으로 {n}개 받자",
+        "config {cfg} {n} events", "daq {cfg} {n}", "{n}개를 {cfg}로 받아줘",
+        "{cfg} 설정 {n}개 돌려", "{cfg}로 DAQ {n}개", "config은 {cfg}, {n}개 돌려줘",
+    ]
+    # config 이름은 자유형 — 다양한 형태를 섞어 학습시켜 임의 이름을 그대로 복사하게 한다
+    config_names = [
+        "test", "setup", "setup1", "setup2", "setup3",
+        "config1", "config2", "config3",
+    ]
+
     for _ in range(150):
         events = _random_events()
-        template = random.choice(templates)
-        user_input = template.format(n=events)
+        state = _make_state(random.random() > 0.3)
+        if random.random() < 0.3:
+            cfg = random.choice(config_names)
+            template = random.choice(config_templates)
+            user_input = template.format(n=events, cfg=cfg)
+            decision = {
+                "tool": "daq_run",
+                "params": {"events": events, "config": cfg},
+                "reason": f"DAQ {events} 이벤트 수집 (config {cfg})",
+            }
+        else:
+            template = random.choice(templates)
+            user_input = template.format(n=events)
+            decision = {
+                "tool": "daq_run",
+                "params": {"events": events},
+                "reason": f"DAQ {events} 이벤트 수집",
+            }
+        examples.append(make_example(state, user_input, decision))
+
+    # k/천/만 단위 표기 — 단위를 곱한 값이 정답 (단위 무시를 학습하면 안 됨)
+    unit_cases = [
+        ("{m}k events 돌려줘", 1000, [10, 50, 100, 200, 300, 500]),
+        ("run {m}k events", 1000, [10, 50, 100, 200, 500]),
+        ("{m}천개 돌려줘", 1000, [1, 2, 5, 10, 50, 100]),
+        ("{m}만개 받아줘", 10000, [1, 2, 3, 5, 10, 30, 50]),
+        ("이벤트 {m}만개 수집해줘", 10000, [1, 5, 10, 20, 50]),
+    ]
+    for _ in range(15):
+        template, mult, m_choices = random.choice(unit_cases)
+        m_val = random.choice(m_choices)
+        events = m_val * mult
         state = _make_state(random.random() > 0.3)
         decision = {
             "tool": "daq_run",
             "params": {"events": events},
             "reason": f"DAQ {events} 이벤트 수집",
         }
-        examples.append(make_example(state, user_input, decision))
+        examples.append(make_example(state, template.format(m=m_val), decision))
     return examples
 
 

@@ -31,6 +31,7 @@ class SimExecMixin:
         beam_energy: Any,
         program: str,
         pos: Optional[Dict[str, float]] = None,
+        daq_config: Optional[str] = None,
     ) -> Tuple[str, Optional[int]]:
         """DAQ 공통 실행: params override → 표시 → 실행 → run# 추출 → plot 대기.
         (result, run_number)를 반환. agent별 부킹은 호출부에서 run_number로 처리."""
@@ -40,6 +41,7 @@ class SimExecMixin:
             beam_energy=beam_energy,
             program=program,
             pos=pos,
+            config=daq_config,
         )
         # override 후 출력 — 표시 params가 실제 실행값과 일치.
         self._sim_emit_tool_call("daq_run_tool", params)

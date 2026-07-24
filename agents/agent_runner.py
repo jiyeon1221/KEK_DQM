@@ -257,7 +257,9 @@ def run_agent_thread(
             update_shared_state({"current_tower": center_tower, "current_energy": beam_energy})
 
             if _is_sim:
-                from sim.position_scan_agent import PositionScanSimAgent as _PSAgent
+                # Sim-ADC: daq/motor 등은 실제로 돌리고 peakADC 측정만 시뮬레이션.
+                # (모든 걸 mock하는 완전 sim은 run_web_sim.py → sim.agent_runner 경로.)
+                from agents.position_scan_sim_agent import PositionScanSimADCAgent as _PSAgent
             else:
                 from agents.position_scan_agent import PositionScanAgent as _PSAgent
 

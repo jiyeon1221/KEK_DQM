@@ -9,7 +9,7 @@ import queue
 import traceback
 from typing import Dict, Any, Optional
 
-from agents.base_agent import BaseAgent
+from agents.base_agent import BaseAgent, _normalize_thousands_commas
 from agents.io_handler import WebSocketIO
 
 
@@ -32,7 +32,12 @@ SYSTEM_PROMPT = """You are the Brain Agent for a test beam experiment (KEK/CERN)
 Your job is to interpret the operator's ad-hoc request and call the right tool.
 
 Available tools:
-- daq_run: Run DAQ data collection. params: {"events": int}
+- daq_run: Run DAQ data collection. params: {"events": int, "config": str (optional)}
+  - config is the DAQ config name passed to the run script. It can be ANY name the user says
+    (e.g. "test", "setup", "setup1", "config1", "physics", ...). Default is "setup" —
+    OMIT config unless the user explicitly names one
+    (e.g. "setup1으로 10000개", "config1 설정으로", "test로 돌려줘").
+    Copy the name EXACTLY as the user wrote it — never invent or normalize it.
 - dqm_plot: Generate DQM plots for a run and display in the DQM panel.
   params: {"run_number": int, "method": "IntADC"|"PeakADC", "type": "full"|"heatmap"|"single", "modules": [list]}
   - type defaults to "full" (all towers + heatmap). No modules needed for full.
@@ -91,6 +96,8 @@ RULES:
    If the request names a channel subset (짝수/홀수/C/S/타워/모듈/채널명/슬롯), pass it in "channels" just like hv_write;
    otherwise omit "channels" to read ALL channels.
 6. DAQ requires an event count. If the user says "DAQ 돌려줘" without a number, ask how many events.
+   If the user names a DAQ config (test, setup1, config1 등 — 어떤 이름이든), put it in "config";
+   otherwise OMIT config (default "setup").
 7. Channel names like M1T1C, M1T1S, M2T3C, ... are HV channels (format: M{1-9}T{1-4}{C,S}) — NOT log columns.
    A SINGLE channel name + voltage → channels: [that single channel].
    ONLY use channels: "all" when the input explicitly says 전체/모든/전 채널/all channels.
@@ -212,6 +219,10 @@ class BrainAgent(BaseAgent):
         self._normalize_hv_params(tool_name, params)
         self._backfill_params(tool_name, params, user_input)
 
+        # 이벤트 수 자릿수 방어: LLM 값을 입력 원문 기준으로 검증/교정
+        if tool_name == "daq_run":
+            self._verify_daq_events(params, user_input)
+
         # "방금"/"이번"/"last"/"지금" → infer run_number from state instead of asking
         if tool_name == "dqm_plot" and not params.get("run_number"):
             if re.search(r'(방금|이번|last|지금)', user_input.lower()):
@@ -323,6 +334,10 @@ class BrainAgent(BaseAgent):
                 ev = self._extract_events_from_text(user_input)
                 if ev:
                     params["events"] = ev
+            if not params.get("config"):
+                cfg = self._extract_config_from_text(user_input)
+                if cfg:
+                    params["config"] = cfg
 
     def _resume_pending(self, user_input: str):
         """대기 중인 누락 필드를 이번 입력으로 채운다.
@@ -353,6 +368,10 @@ class BrainAgent(BaseAgent):
             if ev:
                 params["events"] = ev
                 filled = True
+                if not params.get("config"):
+                    cfg = self._extract_config_from_text(user_input)
+                    if cfg:
+                        params["config"] = cfg
         elif field == "modules":
             mods = self._extract_modules_from_text(user_input)
             if mods:
@@ -380,18 +399,77 @@ class BrainAgent(BaseAgent):
             return "IntADC"
         return None
 
-    @staticmethod
-    def _extract_events_from_text(text: str) -> Optional[int]:
-        m = re.search(r'(\d+)\s*(k|천|만)?', text, re.IGNORECASE)
-        if not m:
-            return None
-        n = int(m.group(1))
-        unit = (m.group(2) or "").lower()
-        if unit == "k" or unit == "천":
-            n *= 1000
-        elif unit == "만":
-            n *= 10000
-        return n if n > 0 else None
+    # config 후보에서 제외할 일반 단어 (DAQ 관련 영어 표현들)
+    _CONFIG_STOPWORDS = {
+        "daq", "run", "runs", "event", "events", "evt", "evts", "data",
+        "start", "take", "collect", "get", "fire", "acquire", "please", "now", "with",
+    }
+
+    @classmethod
+    def _extract_config_from_text(cls, text: str) -> Optional[str]:
+        # config 이름은 임의 문자열(test, setup1, config1, physics ...)일 수 있다.
+        # [A-Za-z0-9_-]로 제한 — \w는 한글 조사("test로")까지 매칭하므로 사용 금지
+        # 1) 명시 키워드: "config setup1", "컨피그 test", "config=abc"
+        m = re.search(r'(?:config|컨피그|콘피그)\s*[:=]?\s*([A-Za-z][A-Za-z0-9_-]*)', text, re.IGNORECASE)
+        if m and m.group(1).lower() not in cls._CONFIG_STOPWORDS:
+            return m.group(1)
+        # 2) "<이름> 설정으로 / <이름> 셋업으로" 형태
+        m = re.search(r'([A-Za-z][A-Za-z0-9_-]*)\s*(?:설정|셋업|세팅)', text, re.IGNORECASE)
+        if m and m.group(1).lower() not in cls._CONFIG_STOPWORDS:
+            return m.group(1)
+        # 3) "<이름>으로/로 ..." 형태 (예: "setup1로 10000개", "test로 돌려줘")
+        m = re.search(r'([A-Za-z][A-Za-z0-9_-]*)(?:으로|로)(?=[\s,.!?]|$)', text, re.IGNORECASE)
+        if m and m.group(1).lower() not in cls._CONFIG_STOPWORDS:
+            return m.group(1)
+        return None
+
+    _EVENT_UNITS = {"k": 1000, "천": 1000, "만": 10000}
+
+    @classmethod
+    def _extract_event_candidates(cls, text: str) -> list:
+        """입력에서 이벤트 수 후보를 우선순위로 추출.
+        1순위: 개/이벤트/event 표기가 붙은 숫자 (run number 등과 구분),
+        표기 붙은 숫자가 없으면 2순위로 나머지 숫자 전부."""
+        t = _normalize_thousands_commas(text)  # "100,000개" → "100000개"
+        marked, others = [], []
+        # (?<![A-Za-z]) — "setup1" 같은 config 이름 속 숫자를 이벤트 수로 오인하지 않도록
+        for m in re.finditer(r'(?<![A-Za-z])(\d+)\s*(k|천|만)?', t, re.IGNORECASE):
+            n = int(m.group(1)) * cls._EVENT_UNITS.get((m.group(2) or "").lower(), 1)
+            if n <= 0:
+                continue
+            tail = t[m.end():m.end() + 12]
+            head = t[max(0, m.start() - 12):m.start()]
+            is_marked = bool(re.match(r'\s*(개|이벤트|events?|evts?)', tail, re.IGNORECASE)) \
+                or bool(re.search(r'(이벤트|events?|evts?)\s*$', head, re.IGNORECASE))
+            (marked if is_marked else others).append(n)
+        return marked if marked else others
+
+    @classmethod
+    def _extract_events_from_text(cls, text: str) -> Optional[int]:
+        cands = cls._extract_event_candidates(text)
+        return cands[0] if cands else None
+
+    def _verify_daq_events(self, params: dict, user_input: str) -> None:
+        """LLM이 넣은 events를 사용자 입력 기준으로 검증/교정 (자릿수 오류 방어).
+        입력에서 후보가 유일하면 그 값으로 확정. 후보가 여러 개인데 LLM 값이
+        그중 어느 것도 아니면(지어낸/자릿수 틀린 숫자) events를 비워 되묻는다."""
+        cands = self._extract_event_candidates(user_input)
+        if not cands:
+            return  # 입력에 숫자 없음 (예: "DAQ 돌려줘") → 기존 흐름(되묻기) 유지
+        ev = params.get("events")
+        if len(set(cands)) == 1:
+            true_val = cands[0]
+            if ev != true_val:
+                self.log(f"[Brain] events 자동 교정(입력 기준): LLM {ev!r} → {true_val}")
+                params["events"] = true_val
+            return
+        try:
+            if ev is not None and int(ev) in cands:
+                return  # 입력에 등장한 숫자 → 신뢰
+        except (TypeError, ValueError):
+            pass
+        self.log(f"[Brain] events {ev!r}가 입력 숫자 {cands}와 불일치 — 되묻기")
+        params["events"] = None
 
     @staticmethod
     def _extract_modules_from_text(text: str) -> list:
@@ -413,7 +491,9 @@ class BrainAgent(BaseAgent):
     def _format_confirm_preview(tool_name: str, params: dict) -> str:
         if tool_name == "daq_run":
             events = params.get("events", "?")
-            return f"DAQ 실행\n  이벤트 수: {events:,}" if isinstance(events, int) else f"DAQ 실행\n  이벤트 수: {events}"
+            config = params.get("config", "setup")
+            events_str = f"{events:,}" if isinstance(events, int) else f"{events}"
+            return f"DAQ 실행\n  Config: {config}\n  이벤트 수: {events_str}"
         if tool_name == "hv_write":
             cmd = params.get("command", "?")
             ch = params.get("channels", "?")

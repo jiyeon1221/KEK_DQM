@@ -101,5 +101,11 @@ def get_hv_config() -> Dict[str, Any]:
     return config.get("HV", {})
 
 
+def get_run_log_beam_type() -> str:
+    """새 Run 로그 작성 시 사용할 기본 Beam Type 반환 (RunLog.BeamType)"""
+    config = load_config()
+    return str(config.get("RunLog", {}).get("BeamType", "e-"))
+
+
 
 

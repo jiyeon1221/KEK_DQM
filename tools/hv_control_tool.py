@@ -647,20 +647,21 @@ class HVControlTool(BaseTool):
 
         name_key = identifier.upper()
 
-        # C / S side 선택: M#T#C (Cherenkov) 또는 M#T#S (Scintillation) 채널 전체
+        # C / S side 선택: 타워 채널 이름은 "T1C..T9C"/"T1S..T9S" 또는 "M1T1C" 형식 모두 지원.
+        # (TRIG1/TRIG2, MCP-C/MCP-S 같은 특수 채널은 제외 — 순수 타워 채널만)
         if name_key in ("C", "S"):
             return sorted(
                 pair for name, pair in name_map.items()
-                if re.match(rf'^M\d+T\d+{name_key}$', name)
+                if re.match(rf'^(?:M\d+[-_ ]?)?T\d+[-_ ]?{name_key}$', name)
             )
 
-        # Tower 선택: "T1"~"T4" → 모든 모듈의 해당 타워 채널 (M?T{n}C, M?T{n}S)
-        tower_m = re.match(r'^T([1-4])$', name_key)
+        # Tower 선택: "T1"~"T9" → 모든 모듈의 해당 타워 C/S 채널
+        tower_m = re.match(r'^T(\d+)$', name_key)
         if tower_m:
             tn = tower_m.group(1)
             return sorted(
                 pair for name, pair in name_map.items()
-                if re.match(rf'^M\d+T{tn}[CS]$', name)
+                if re.match(rf'^(?:M\d+[-_ ]?)?T{tn}[-_ ]?[CS]$', name)
             )
 
         # Name lookup

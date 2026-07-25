@@ -740,9 +740,11 @@ void TBaux::SetParticle(std::string fParticle_) {
 
   // Restored from TB2025: AUX.<PARTICLE>.{CC1,CC2,PS_INIT,PS_FIN}, used by
   // the DWCPID --AUXcut mode (see IsPassing()). Any particle name is
-  // accepted here (not just PION/KAON/PROTON) as long as config_general.yml
-  // has a matching top-level AUX.<name> block; unknown names just print a
-  // warning and leave the previous (or default) cut values untouched.
+  // accepted here (not just PION/KAON/PROTON/POSITRON) as long as
+  // config_general.yml has a matching top-level AUX.<name> block; unknown
+  // names just print a warning and leave the previous (or default) cut
+  // values untouched. The actual cut *logic* per particle (which of
+  // CC1/CC2 must be above/below threshold, etc.) lives in PassPIDCuts().
   const auto nodeParticle = fNodeAux[fParticle];
   if (!nodeParticle) {
     if (fParticle != "null" && !fParticle.empty()) {
@@ -1249,6 +1251,18 @@ bool TBaux::PassPIDCuts(TBevt<TBwaveform> anEvent) {
     if (fCC2cut >= 0 && !(cc2Peak < fCC2cut)) return false;
   } else if (fParticle == "PROTON") {
     if (!(psPeak >= fPSInitCut && psPeak <= fPSFinCut)) return false;
+    if (fCC2cut >= 0 && !(cc2Peak > fCC2cut)) return false;
+  } else if (fParticle == "POSITRON") {
+    // e+ (positron) selection, ported from TB2025's calib_DRC_with_ntuple.cc:
+    // require a PS deposit above the shower threshold (fPSInitCut acts as a
+    // single lower bound here — set PS_FIN high in config_general.yml to
+    // keep the window effectively open-ended), plus CC1 AND CC2 *both*
+    // firing above threshold (double-Cherenkov coincidence: a positron is
+    // light/fast enough to be above threshold in both radiators, unlike
+    // pions/kaons/protons at the same momentum). The MC veto above already
+    // rejects any punch-through tail.
+    if (!(psPeak >= fPSInitCut && psPeak <= fPSFinCut)) return false;
+    if (fCC1cut >= 0 && !(cc1Peak > fCC1cut)) return false;
     if (fCC2cut >= 0 && !(cc2Peak > fCC2cut)) return false;
   } else {
     // No --particle given: fall back to the plain PS threshold.

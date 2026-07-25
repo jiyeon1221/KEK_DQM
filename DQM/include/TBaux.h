@@ -260,7 +260,8 @@ private:
   double fMCVetoThreshold; // AUX.PID.MC_VETO_PEAKADC
   // Particle-specific PID windows, set by SetParticle() from
   // AUX.<PARTICLE>.{CC1,CC2,PS_INIT,PS_FIN}. CC1 < 0 means "not used"
-  // (e.g. PROTON selection only requires CC2).
+  // (e.g. PROTON selection only requires CC2). Supported names with cut
+  // logic implemented in PassPIDCuts(): PION, KAON, PROTON, POSITRON.
   double fCC1cut;
   double fCC2cut;
   double fPSInitCut;

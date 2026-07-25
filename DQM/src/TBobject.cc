@@ -160,7 +160,7 @@ bool ObjectCollection::Help() {
     std::cout << ANSI.BOLD + "                 use this when DWC is unavailable)" + ANSI.END << std::endl;
     std::cout << ANSI.BOLD + "      'DWC'    : DWC1<->DWC2 position/correlation cut only" + ANSI.END << std::endl;
     std::cout << ANSI.BOLD + "      'DWCPID' : DWC cut + PID cut combined" + ANSI.END << std::endl;
-    std::cout << ANSI.BOLD + "    --particle " + ANSI.YELLOW + "'PION' | 'KAON' | 'PROTON' (used by 'PID'/'DWCPID'; optional)" + ANSI.END << std::endl;
+    std::cout << ANSI.BOLD + "    --particle " + ANSI.YELLOW + "'PION' | 'KAON' | 'PROTON' | 'POSITRON' (used by 'PID'/'DWCPID'; optional)" + ANSI.END << std::endl;
     std::cout << "    eg) ./monit --RunNumver 9119 --type full --method IntADC --AUXcut --AUXCutMode PID --particle PION" << std::endl;
     std::cout << "    eg) ./monit --RunNumver 9119 --type full --method IntADC --AUXcut --AUXCutMode DWCPID --particle PION" << std::endl;
     std::cout << ANSI.BOLD << "------------------------------------------------------" << ANSI.END << std::endl;

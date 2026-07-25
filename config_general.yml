@@ -109,8 +109,9 @@ AUX:
     PS_THRESHOLD_PEAKADC: 424  # "no --particle" cut: reject if PS PeakADC < this
     MC_VETO_PEAKADC: 38        # reject if MC PeakADC < this (ported as-is from TB2025)
 
-  # Per-particle CC1/CC2/PS windows, selected via `--particle PION|KAON|PROTON`
-  # (see TBaux::SetParticle / IsPassing). CC1: -1 means "not used" (PROTON).
+  # Per-particle CC1/CC2/PS windows, selected via
+  # `--particle PION|KAON|PROTON|POSITRON` (see TBaux::SetParticle /
+  # PassPIDCuts). CC1: -1 means "not used" (PROTON).
   # PLACEHOLDER: only PION values are known from TB2025; KAON/PROTON are
   # rough guesses and must be retuned from TB2026 beam data.
   PION:
@@ -128,6 +129,20 @@ AUX:
     CC2: 40
     PS_INIT: 80
     PS_FIN: 202
+  # e+ selection: requires CC1 AND CC2 *both* above threshold (double-
+  # Cherenkov coincidence — a positron is light/fast enough to fire both
+  # radiators, unlike hadrons at the same momentum) plus a PS deposit
+  # above the shower threshold (PS_INIT). PS_FIN is set to the ADC max
+  # (i.e. no upper bound) since, unlike PION/KAON/PROTON, there's no
+  # physical reason to cap the shower size from above.
+  # PLACEHOLDER: ported from TB2025's analysis/calib_DRC_with_ntuple.cc
+  # (cut_CC1=60, cut_CC2=100, cut_PS=600, PeakADC), NOT retuned for
+  # TB2026 — retune once real beam data is available.
+  POSITRON:
+    CC1: 60
+    CC2: 100
+    PS_INIT: 600
+    PS_FIN: 4095
 
 # ===== AstroPix position detector — DEACTIVATED for now ====================
 # DWC is the position detector in use this run, so the AstroPix hardware
@@ -199,78 +214,78 @@ ModuleConfig:
   DWC2U: [1, 1000]
   DWC2D: [1, 1000]
   # DRC channels: M{1-9}-T{1-4}-{S,C}  (9 modules × 4 towers × 2 sides = 72 channels)
-  M1-T1-S: [120, 310]
-  M1-T1-C: [120, 310]
-  M1-T2-S: [120, 310]
-  M1-T2-C: [120, 310]
-  M1-T3-S: [120, 310]
-  M1-T3-C: [120, 310]
-  M1-T4-S: [120, 310]
-  M1-T4-C: [120, 310]
-  M2-T1-S: [120, 310]
-  M2-T1-C: [120, 310]
-  M2-T2-S: [120, 310]
-  M2-T2-C: [120, 310]
-  M2-T3-S: [120, 310]
-  M2-T3-C: [120, 310]
-  M2-T4-S: [120, 310]
-  M2-T4-C: [120, 310]
-  M3-T1-S: [120, 310]
-  M3-T1-C: [120, 310]
-  M3-T2-S: [120, 310]
-  M3-T2-C: [120, 310]
-  M3-T3-S: [120, 310]
-  M3-T3-C: [120, 310]
-  M3-T4-S: [120, 310]
-  M3-T4-C: [120, 310]
-  M4-T1-S: [120, 310]
-  M4-T1-C: [120, 310]
-  M4-T2-S: [120, 310]
-  M4-T2-C: [120, 310]
-  M4-T3-S: [120, 310]
-  M4-T3-C: [120, 310]
-  M4-T4-S: [120, 310]
-  M4-T4-C: [120, 310]
-  M5-T1-S: [120, 310]
-  M5-T1-C: [120, 310]
-  M5-T2-S: [120, 310]
-  M5-T2-C: [120, 310]
-  M5-T3-S: [120, 310]
-  M5-T3-C: [120, 310]
-  M5-T4-S: [120, 310]
-  M5-T4-C: [120, 310]
-  M6-T1-S: [120, 310]
-  M6-T1-C: [120, 310]
-  M6-T2-S: [120, 310]
-  M6-T2-C: [120, 310]
-  M6-T3-S: [120, 310]
-  M6-T3-C: [120, 310]
-  M6-T4-S: [120, 310]
-  M6-T4-C: [120, 310]
-  M7-T1-S: [120, 310]
-  M7-T1-C: [120, 310]
-  M7-T2-S: [120, 310]
-  M7-T2-C: [120, 310]
-  M7-T3-S: [120, 310]
-  M7-T3-C: [120, 310]
-  M7-T4-S: [120, 310]
-  M7-T4-C: [120, 310]
-  M8-T1-S: [120, 310]
-  M8-T1-C: [120, 310]
-  M8-T2-S: [120, 310]
-  M8-T2-C: [120, 310]
-  M8-T3-S: [120, 310]
-  M8-T3-C: [120, 310]
-  M8-T4-S: [120, 310]
-  M8-T4-C: [120, 310]
-  M9-T1-S: [120, 310]
-  M9-T1-C: [120, 310]
-  M9-T2-S: [120, 310]
-  M9-T2-C: [120, 310]
-  M9-T3-S: [120, 310]
-  M9-T3-C: [120, 310]
-  M9-T4-S: [120, 310]
-  M9-T4-C: [120, 310]
+  M1-T1-S: [260, 460]
+  M1-T2-S: [260, 460]
+  M1-T3-S: [260, 460]
+  M1-T4-S: [260, 460]
+  M2-T1-S: [260, 460]
+  M2-T2-S: [260, 460]
+  M2-T3-S: [260, 460]
+  M2-T4-S: [260, 460]
+  M3-T1-S: [260, 460]
+  M3-T2-S: [260, 460]
+  M3-T3-S: [260, 460]
+  M3-T4-S: [260, 460]
+  M4-T1-S: [260, 460]
+  M4-T2-S: [260, 460]
+  M4-T3-S: [260, 460]
+  M4-T4-S: [260, 460]
+  M5-T1-S: [260, 460]
+  M5-T2-S: [260, 460]
+  M5-T3-S: [260, 460]
+  M5-T4-S: [260, 460]
+  M6-T1-S: [260, 460]
+  M6-T2-S: [260, 460]
+  M6-T3-S: [260, 460]
+  M6-T4-S: [260, 460]
+  M7-T1-S: [260, 460]
+  M7-T2-S: [260, 460]
+  M7-T3-S: [260, 460]
+  M7-T4-S: [260, 460]
+  M8-T1-S: [260, 460]
+  M8-T2-S: [260, 460]
+  M8-T3-S: [260, 460]
+  M8-T4-S: [260, 460]
+  M9-T1-S: [260, 460]
+  M9-T2-S: [260, 460]
+  M9-T3-S: [260, 460]
+  M9-T4-S: [260, 460]
+  M1-T1-C: [260, 400]
+  M1-T2-C: [260, 400]
+  M1-T3-C: [260, 400]
+  M1-T4-C: [260, 400]
+  M2-T1-C: [260, 400]
+  M2-T2-C: [260, 400]
+  M2-T3-C: [260, 400]
+  M2-T4-C: [260, 400]
+  M3-T1-C: [260, 400]
+  M3-T2-C: [260, 400]
+  M3-T3-C: [260, 400]
+  M3-T4-C: [260, 400]
+  M4-T1-C: [260, 400]
+  M4-T2-C: [260, 400]
+  M4-T3-C: [260, 400]
+  M4-T4-C: [260, 400]
+  M5-T1-C: [260, 400]
+  M5-T2-C: [260, 400]
+  M5-T3-C: [260, 400]
+  M5-T4-C: [260, 400]
+  M6-T1-C: [260, 400]
+  M6-T2-C: [260, 400]
+  M6-T3-C: [260, 400]
+  M6-T4-C: [260, 400]
+  M7-T1-C: [260, 400]
+  M7-T2-C: [260, 400]
+  M7-T3-C: [260, 400]
+  M7-T4-C: [260, 400]
+  M8-T1-C: [260, 400]
+  M8-T2-C: [260, 400]
+  M8-T3-C: [260, 400]
+  M8-T4-C: [260, 400]
+  M9-T1-C: [260, 400]
+  M9-T2-C: [260, 400]
+  M9-T3-C: [260, 400]
+  M9-T4-C: [260, 400]
   # Hodoscope channels (legacy KEK HX1-16/HY1-16 and TB2026 CERN
   # RH1X/RH1Y/RH2X/RH2Y/SHX/SHY) are deactivated for now — DWC is the
   # position detector in use this run. See

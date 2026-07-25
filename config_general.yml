@@ -3,7 +3,7 @@ BaseDirectory: "/Volumes/yhep/scratch/YUdaq"
 # M5-T3 is the MCP-PMT sum channel, MCP-PMT singles (C1..C64/S1..S64),
 # DWC1/2, PS/MC/TC/CC1/CC2, LC1..LC4, triggers. MIDs/channels are
 # PLACEHOLDERS pending real TB2026 cabling; see DQM/mapping/mapping_TB2026_v1.csv.
-Mapping: "/Users/yhep/tmp_test/CERN2026_update/KEK_DQM/DQM/mapping/mapping_TB2026_v1.root"
+Mapping: "/Users/yhep/AI/CERN2026/DQM/mapping/mapping_TB2026_v1.root"
 # Previous KEK TB2026May (3x3 tower) mapping, kept for reference:
 # Mapping: "/Users/yhep/AI/CERN2026/DQM/mapping/toymapping.root"
 # Hodoscope test mapping used for the Run 15105 hodo/AstroPix validation
@@ -23,8 +23,7 @@ Paths:
   NoticeBase: "/Users/yhep/scratch/notice"
   KillMeFile: "/Users/yhep/scratch/notice/test/TB_daq/KILLME"
 
-  # DqmDir: "/Users/yhep/AI/CERN2026/DQM"
-  DqmDir: "/Users/yhep/tmp_test/CERN2026_update/KEK_DQM/DQM"
+  DqmDir: "/Users/yhep/AI/CERN2026/DQM"
 
   HodoscopeSetFile: "/Volumes/yhep/scratch/notice/test/TB_daq/config/setup/set_JBNU_DAQ_21.txt"
   DaqLogDir: "/Volumes/yhep/scratch/notice/test/TB_daq/log"

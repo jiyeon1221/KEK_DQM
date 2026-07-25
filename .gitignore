@@ -38,6 +38,7 @@ DQM/draw_astropix_CERN
 DQM/draw_hodoscope_CERN_round
 DQM/draw_hodoscope_CERN_square
 DQM/normalize_hodo_CERN
+DQM/draw_intADC
 
 # 표준 standalone 드로잉 결과물
 DQM/AstroPix/

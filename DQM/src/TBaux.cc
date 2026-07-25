@@ -6,6 +6,8 @@
 #include <sys/types.h>
 #include <fstream>
 #include <cstdio>
+#include <sstream>
+#include <cctype>
 
 
 TBaux::TBaux(const YAML::Node fNodePlot_, int fRunNum_, bool fPlotting_, bool fLive_, bool fDraw_, TButility fUtility_)
@@ -32,6 +34,33 @@ TBaux::TBaux(const YAML::Node fNodePlot_, int fRunNum_, bool fPlotting_, bool fL
   fCID_WCX(),
   fCID_WCY(),
   fCID_NIM(),
+  fDWCEnabled(false),
+  fCID_DWC1R(), fCID_DWC1L(), fCID_DWC1U(), fCID_DWC1D(),
+  fCID_DWC2R(), fCID_DWC2L(), fCID_DWC2U(), fCID_DWC2D(),
+  fDWCThreshold(0.4),
+  fDWCCalib({0.180654, 0.217961, -0.180342, -0.0994697, 0.181416, -0.00911072, -0.17822, -0.0489771}),
+  fDWCCenter({-5.24, -8.416, -2.834, -9.524}),
+  fDWCCorr(4.0),
+  fDWCPosCut(-1.),
+  fDWC1Pos(nullptr),
+  fDWC2Pos(nullptr),
+  fDWCXCorr(nullptr),
+  fDWCYCorr(nullptr),
+  fCanvasDWC(nullptr),
+  fPIDEnabled(false),
+  fCID_PS(), fCID_MC(), fCID_TC(), fCID_CC1(), fCID_CC2(),
+  fPS(nullptr),
+  fMC(nullptr),
+  fTC(nullptr),
+  fCC1(nullptr),
+  fCC2(nullptr),
+  fCanvasPID(nullptr),
+  fPSThreshold(424.0),
+  fMCVetoThreshold(38.0),
+  fCC1cut(-1.),
+  fCC2cut(-1.),
+  fPSInitCut(-1.),
+  fPSFinCut(1.0e9),
   fHodoEnabled(false),
   fCID_HodoX(),
   fCID_HodoY(),
@@ -52,61 +81,122 @@ TBaux::TBaux(const YAML::Node fNodePlot_, int fRunNum_, bool fPlotting_, bool fL
   fHodoIntADC_corr(nullptr),
   fHodoPeakADC_corr(nullptr),
   fCanvasHodoIntADC_corr(nullptr),
-  fCanvasHodoPeakADC_corr(nullptr)
+  fCanvasHodoPeakADC_corr(nullptr),
+  fSqHodoEnabled(false),
+  fCID_SqHodoX(), fCID_SqHodoY(),
+  fSqHodoFirst(150), fSqHodoLast(350),
+  fSqHodoCenter({14.5, 14.5}),
+  fSqHodoNormIntADC_X(29, 1.0), fSqHodoNormIntADC_Y(29, 1.0),
+  fSqHodoNormPeakADC_X(29, 1.0), fSqHodoNormPeakADC_Y(29, 1.0),
+  fSqHodoThrIntADC_X(29, 0.0), fSqHodoThrIntADC_Y(29, 0.0),
+  fSqHodoThrPeakADC_X(29, 0.0), fSqHodoThrPeakADC_Y(29, 0.0),
+  fSqHodoIntADC(nullptr),
+  fSqHodoPeakADC(nullptr),
+  fCanvasSqHodoIntADC(nullptr),
+  fCanvasSqHodoPeakADC(nullptr),
+  fRndHodoEnabled(false),
+  fCID_RndHodoX(), fCID_RndHodoY(),
+  fRndHodoFirst(150), fRndHodoLast(350),
+  fRndHodoCenter({8.25, 8.25}),
+  fRndHodoNormIntADC_X(32, 1.0), fRndHodoNormIntADC_Y(32, 1.0),
+  fRndHodoNormPeakADC_X(32, 1.0), fRndHodoNormPeakADC_Y(32, 1.0),
+  fRndHodoThrIntADC_X(32, 0.0), fRndHodoThrIntADC_Y(32, 0.0),
+  fRndHodoThrPeakADC_X(32, 0.0), fRndHodoThrPeakADC_Y(32, 0.0),
+  fRndHodoIntADC(nullptr),
+  fRndHodoPeakADC(nullptr),
+  fCanvasRndHodoIntADC(nullptr),
+  fCanvasRndHodoPeakADC(nullptr)
 {}
 
 void TBaux::init() {
 
+  // AUX.WC is only mandatory in YAML when the operator actually asked for
+  // WC (via --AUXMode or a WC-based --AUXCutMode). WC is currently hidden
+  // from the web UI (CERN has no wire chamber), so a config without an
+  // AUX.WC block must not block DWC/PID-only runs; the strict validation
+  // below only runs once we know WC is actually requested (see needWC
+  // computed just below — this whole block is re-entered defensively so
+  // config typos still fail loudly when WC *is* requested).
   const auto nodeWC = fNodeAux["WC"];
-  if (!nodeWC) {
-    throw std::runtime_error("AUX.WC is not configured in YAML.");
-  }
-
-  if (nodeWC["CALIB"]) {
-    fWCCalibration = nodeWC["CALIB"].as<double>();
-  } else {
-    throw std::runtime_error("AUX.WC.CALIB is missing in YAML.");
-  }
-
-  if (nodeWC["CENTER"]) {
-    fWCReference = nodeWC["CENTER"].as<std::vector<double>>();
-    if (fWCReference.size() != 2) {
-      throw std::runtime_error("AUX.WC.CENTER must contain exactly two values (X_ref, Y_ref).");
-    }
-  } else {
-    throw std::runtime_error("AUX.WC.CENTER is missing in YAML.");
-  }
-
-  if (nodeWC["THRESHOLD"])
-    fWCThreshold = nodeWC["THRESHOLD"].as<double>();
-
-  if (nodeWC["POSCUT"])
-    fWCPosCut = nodeWC["POSCUT"].as<double>();
 
   // ── Decide which AUX subsystems we actually need to load ───────────────
-  // The operator picks --AUXMode WC|Hodo|WCHodo (default WCHodo when --AUX
-  // is on without an explicit mode). Separately --AUXcut may require WC
-  // (always) and Hodo (only when --AUXCutMode is WCHodo). We "need" a
-  // subsystem if EITHER the plot path OR the cut path asks for it. This
-  // is the gate that prevents TBread from trying to open MID 17 when the
-  // hodoscope is physically out of the setup and the operator hasn't
-  // asked for Hodo plots or the WCHodo cut.
-  if (fAuxMode != "WC" && fAuxMode != "Hodo" && fAuxMode != "WCHodo") {
-    std::cout << "[TBaux] Unrecognised --AUXMode '" << fAuxMode
-              << "', falling back to 'WCHodo'." << std::endl;
-    fAuxMode = "WCHodo";
+  // The operator picks --AUXMode as a comma-separated list of any of
+  // "WC", "Hodo", "DWC", "PID" (or the legacy single tokens "WC" | "Hodo"
+  // | "WCHodo", where "WCHodo" expands to "WC,Hodo"). Separately --AUXcut
+  // may require specific subsystems depending on --AUXCutMode: "WC" needs
+  // WC, "WCHodo" needs WC+Hodo, "DWC" needs DWC, "DWCPID" needs DWC+PID.
+  // We "need" a subsystem if EITHER the plot path OR the cut path asks
+  // for it. This is the gate that prevents TBread from trying to open a
+  // MID for a subsystem that is physically out of the setup (hodoscope,
+  // or — at CERN — the wire chamber) when the operator hasn't asked for
+  // it.
+  bool modeWantsWC = false, modeWantsHodo = false, modeWantsDWC = false, modeWantsPID = false;
+  {
+    std::vector<std::string> tokens;
+    std::istringstream iss(fAuxMode);
+    std::string tok;
+    while (std::getline(iss, tok, ',')) tokens.push_back(tok);
+
+    bool anyRecognised = false;
+    for (std::string tok2 : tokens) {
+      while (!tok2.empty() && std::isspace((unsigned char)tok2.front())) tok2.erase(tok2.begin());
+      while (!tok2.empty() && std::isspace((unsigned char)tok2.back()))  tok2.pop_back();
+
+      if (tok2 == "WCHodo")     { modeWantsWC = true; modeWantsHodo = true; anyRecognised = true; }
+      else if (tok2 == "WC")   { modeWantsWC = true;   anyRecognised = true; }
+      else if (tok2 == "Hodo") { modeWantsHodo = true; anyRecognised = true; }
+      else if (tok2 == "DWC")  { modeWantsDWC = true;  anyRecognised = true; }
+      else if (tok2 == "PID")  { modeWantsPID = true;  anyRecognised = true; }
+      else if (!tok2.empty()) {
+        std::cout << "[TBaux] Unrecognised --AUXMode token '" << tok2 << "', ignoring." << std::endl;
+      }
+    }
+    if (!anyRecognised) {
+      std::cout << "[TBaux] No valid --AUXMode tokens found in '" << fAuxMode
+                << "', falling back to 'WC,Hodo'." << std::endl;
+      modeWantsWC = true;
+      modeWantsHodo = true;
+    }
   }
-  const bool modeWantsWC   = (fAuxMode != "Hodo");
-  const bool modeWantsHodo = (fAuxMode != "WC");
-  const bool needWC   = (fPlotting && modeWantsWC)   || fAuxCut;
+
+  const bool needWC   = (fPlotting && modeWantsWC)   || (fAuxCut && (fAuxCutMode == "WC" || fAuxCutMode == "WCHodo"));
   const bool needHodo = (fPlotting && modeWantsHodo) || (fAuxCut && fAuxCutMode == "WCHodo");
+  const bool needDWC  = (fPlotting && modeWantsDWC)  || (fAuxCut && (fAuxCutMode == "DWC" || fAuxCutMode == "DWCPID"));
+  const bool needPID  = (fPlotting && modeWantsPID)  || (fAuxCut && (fAuxCutMode == "DWCPID" || fAuxCutMode == "PID"));
 
   std::cout << "[TBaux] AUXMode='" << fAuxMode
             << "' AUXcut=" << (fAuxCut ? "on" : "off")
             << " AUXCutMode='" << fAuxCutMode << "'"
             << " → load WC=" << (needWC ? "yes" : "no")
             << ", load Hodo=" << (needHodo ? "yes" : "no")
+            << ", load DWC=" << (needDWC ? "yes" : "no")
+            << ", load PID=" << (needPID ? "yes" : "no")
             << std::endl;
+
+  // ── WC config (only mandatory when WC is actually needed) ──────────────
+  // Strict validation (throws on missing/malformed YAML) only runs here,
+  // gated on needWC, so a DWC/PID-only config (no AUX.WC block at all —
+  // the expected CERN setup, no wire chamber) never trips this.
+  if (needWC) {
+    if (!nodeWC) {
+      throw std::runtime_error("AUX.WC is not configured in YAML.");
+    }
+    if (nodeWC["CALIB"]) {
+      fWCCalibration = nodeWC["CALIB"].as<double>();
+    } else {
+      throw std::runtime_error("AUX.WC.CALIB is missing in YAML.");
+    }
+    if (nodeWC["CENTER"]) {
+      fWCReference = nodeWC["CENTER"].as<std::vector<double>>();
+      if (fWCReference.size() != 2) {
+        throw std::runtime_error("AUX.WC.CENTER must contain exactly two values (X_ref, Y_ref).");
+      }
+    } else {
+      throw std::runtime_error("AUX.WC.CENTER is missing in YAML.");
+    }
+    if (nodeWC["THRESHOLD"]) fWCThreshold = nodeWC["THRESHOLD"].as<double>();
+    if (nodeWC["POSCUT"])    fWCPosCut    = nodeWC["POSCUT"].as<double>();
+  }
 
   // ── WC channel resolution (only if needed) ─────────────────────────────
   // TButility::GetCID() returns TBcid(-1, -1) when the channel name is not
@@ -158,6 +248,144 @@ void TBaux::init() {
     fCanvas->cd(1)->SetRightMargin(0.13);
   }
 
+  // ── DWC channel resolution (only if needed) ─────────────────────────────
+  // Restored from TB2025. Mirrors the WC pattern above: resolve all 8
+  // timing-edge CIDs, only enable + push into fCIDtoPlot if every one of
+  // them is present in the loaded mapping (e.g. the DWC boxes might not be
+  // installed for a given run).
+  if (needDWC) {
+    fCID_DWC1R = fUtility.GetCID("DWC1R");
+    fCID_DWC1L = fUtility.GetCID("DWC1L");
+    fCID_DWC1U = fUtility.GetCID("DWC1U");
+    fCID_DWC1D = fUtility.GetCID("DWC1D");
+    fCID_DWC2R = fUtility.GetCID("DWC2R");
+    fCID_DWC2L = fUtility.GetCID("DWC2L");
+    fCID_DWC2U = fUtility.GetCID("DWC2U");
+    fCID_DWC2D = fUtility.GetCID("DWC2D");
+    fDWCEnabled = cidValid(fCID_DWC1R) && cidValid(fCID_DWC1L) && cidValid(fCID_DWC1U) && cidValid(fCID_DWC1D)
+               && cidValid(fCID_DWC2R) && cidValid(fCID_DWC2L) && cidValid(fCID_DWC2U) && cidValid(fCID_DWC2D);
+    if (!fDWCEnabled) {
+      std::cout << "[TBaux] DWC channels missing from the loaded mapping "
+                << "(DWC1R/L/U/D, DWC2R/L/U/D); DWC plots and DWC-based "
+                << "--AUXcut modes will be skipped." << std::endl;
+    } else {
+      fCIDtoPlot.push_back(fCID_DWC1R); fCIDtoPlot.push_back(fCID_DWC1L);
+      fCIDtoPlot.push_back(fCID_DWC1U); fCIDtoPlot.push_back(fCID_DWC1D);
+      fCIDtoPlot.push_back(fCID_DWC2R); fCIDtoPlot.push_back(fCID_DWC2L);
+      fCIDtoPlot.push_back(fCID_DWC2U); fCIDtoPlot.push_back(fCID_DWC2D);
+
+      const auto nodeDWC = fNodeAux["DWC"];
+      if (nodeDWC) {
+        if (nodeDWC["THRESHOLD"]) fDWCThreshold = nodeDWC["THRESHOLD"].as<double>();
+        if (nodeDWC["CALIB"]) {
+          const auto v = nodeDWC["CALIB"].as<std::vector<double>>();
+          if (v.size() == 8) fDWCCalib = v;
+          else std::cout << "[TBaux] AUX.DWC.CALIB must have exactly 8 entries; keeping defaults." << std::endl;
+        }
+        if (nodeDWC["CENTER"]) {
+          const auto v = nodeDWC["CENTER"].as<std::vector<double>>();
+          if (v.size() == 4) fDWCCenter = v;
+          else std::cout << "[TBaux] AUX.DWC.CENTER must have exactly 4 entries; keeping defaults." << std::endl;
+        }
+        if (nodeDWC["CORR"])   fDWCCorr   = nodeDWC["CORR"].as<double>();
+        if (nodeDWC["POSCUT"]) fDWCPosCut = nodeDWC["POSCUT"].as<double>();
+      } else {
+        std::cout << "[TBaux] AUX.DWC is not configured in YAML; using built-in "
+                  << "placeholder calibration constants (see TBaux.h)." << std::endl;
+      }
+    }
+  } else {
+    fDWCEnabled = false;
+    std::cout << "[TBaux] DWC plots/cut not requested (AUXMode='" << fAuxMode
+              << "', AUXCutMode='" << fAuxCutMode << "')"
+              << " — skipping DWC channel load." << std::endl;
+  }
+
+  if (needDWC) {
+    fDWC1Pos = new TH2D(
+      "DWC1_Position",
+      (TString)"Run " + std::to_string(fRunNum) + " DWC1 position;X [mm];Y [mm]",
+      120, -30., 30., 120, -30., 30.);
+    fDWC1Pos->SetStats(0);
+
+    fDWC2Pos = new TH2D(
+      "DWC2_Position",
+      (TString)"Run " + std::to_string(fRunNum) + " DWC2 position;X [mm];Y [mm]",
+      120, -30., 30., 120, -30., 30.);
+    fDWC2Pos->SetStats(0);
+
+    fDWCXCorr = new TH2D(
+      "DWC_XCorrelation",
+      (TString)"Run " + std::to_string(fRunNum) + " DWC1 X vs DWC2 X;DWC1 X [mm];DWC2 X [mm]",
+      120, -30., 30., 120, -30., 30.);
+    fDWCXCorr->SetStats(0);
+
+    fDWCYCorr = new TH2D(
+      "DWC_YCorrelation",
+      (TString)"Run " + std::to_string(fRunNum) + " DWC1 Y vs DWC2 Y;DWC1 Y [mm];DWC2 Y [mm]",
+      120, -30., 30., 120, -30., 30.);
+    fDWCYCorr->SetStats(0);
+
+    fCanvasDWC = new TCanvas("fCanvas_DWC", "fCanvas_DWC", 1600, 1600);
+    fCanvasDWC->Divide(2, 2);
+    for (int p = 1; p <= 4; ++p) fCanvasDWC->cd(p)->SetRightMargin(0.13);
+  }
+
+  // ── PID channel resolution (PS, MC, TC, CC1, CC2; only if needed) ──────
+  // Restored from TB2025.
+  if (needPID) {
+    fCID_PS  = fUtility.GetCID("PS");
+    fCID_MC  = fUtility.GetCID("MC");
+    fCID_TC  = fUtility.GetCID("TC");
+    fCID_CC1 = fUtility.GetCID("CC1");
+    fCID_CC2 = fUtility.GetCID("CC2");
+    fPIDEnabled = cidValid(fCID_PS) && cidValid(fCID_MC) && cidValid(fCID_TC)
+               && cidValid(fCID_CC1) && cidValid(fCID_CC2);
+    if (!fPIDEnabled) {
+      std::cout << "[TBaux] PID channels missing from the loaded mapping "
+                << "(PS/MC/TC/CC1/CC2); PID plots and the DWCPID --AUXcut mode "
+                << "will be skipped." << std::endl;
+    } else {
+      fCIDtoPlot.push_back(fCID_PS);
+      fCIDtoPlot.push_back(fCID_MC);
+      fCIDtoPlot.push_back(fCID_TC);
+      fCIDtoPlot.push_back(fCID_CC1);
+      fCIDtoPlot.push_back(fCID_CC2);
+
+      const auto nodePID = fNodeAux["PID"];
+      if (nodePID) {
+        if (nodePID["PS_THRESHOLD_PEAKADC"]) fPSThreshold     = nodePID["PS_THRESHOLD_PEAKADC"].as<double>();
+        if (nodePID["MC_VETO_PEAKADC"])      fMCVetoThreshold = nodePID["MC_VETO_PEAKADC"].as<double>();
+      } else {
+        std::cout << "[TBaux] AUX.PID is not configured in YAML; using built-in "
+                  << "placeholder thresholds (PS >= " << fPSThreshold
+                  << ", MC >= " << fMCVetoThreshold << ")." << std::endl;
+      }
+    }
+  } else {
+    fPIDEnabled = false;
+    std::cout << "[TBaux] PID plots/cut not requested (AUXMode='" << fAuxMode
+              << "', AUXCutMode='" << fAuxCutMode << "')"
+              << " — skipping PID channel load." << std::endl;
+  }
+
+  if (needPID) {
+    const int psBins = 1152; // PeakADC binning, matches TBplotengine's convention
+    fPS  = new TH1D("PS",  (TString)"Run " + std::to_string(fRunNum) + " PS;PeakADC;nEvents",       psBins, -512., 4096.);
+    fMC  = new TH1D("MC",  (TString)"Run " + std::to_string(fRunNum) + " MC;PeakADC;nEvents",       psBins, -512., 4096.);
+    fTC  = new TH1D("TC",  (TString)"Run " + std::to_string(fRunNum) + " TC;PeakADC;nEvents",       psBins, -512., 4096.);
+    fCC1 = new TH1D("CC1", (TString)"Run " + std::to_string(fRunNum) + " CC1 + CC2;PeakADC;nEvents", psBins, -512., 4096.);
+    fCC2 = new TH1D("CC2", (TString)"Run " + std::to_string(fRunNum) + " CC2;PeakADC;nEvents",       psBins, -512., 4096.);
+    fPS->SetStats(1);  fPS->SetLineColor(kBlue + 1);   fPS->SetLineWidth(2);
+    fMC->SetStats(1);  fMC->SetLineColor(kRed + 1);    fMC->SetLineWidth(2);
+    fTC->SetStats(1);  fTC->SetLineColor(kGreen + 2);  fTC->SetLineWidth(2);
+    fCC1->SetStats(1); fCC1->SetLineColor(kAzure + 2); fCC1->SetLineWidth(2);
+    fCC2->SetStats(1); fCC2->SetLineColor(kOrange + 7);fCC2->SetLineWidth(2);
+
+    fCanvasPID = new TCanvas("fCanvas_PID", "fCanvas_PID", 1600, 1600);
+    fCanvasPID->Divide(2, 2);
+  }
+
   // ── Read Hodo YAML config (cheap; always done regardless of needHodo) ─
   // We pull AUX.Hodoscope.CENTER / CUT_METHOD / NORM_CONST_* unconditionally
   // because the YAML reads are essentially free and keep the helpers
@@ -204,6 +432,104 @@ void TBaux::init() {
   if (fNodeAux["INCLINATION_CUT"]) {
     const auto v = fNodeAux["INCLINATION_CUT"].as<std::vector<double>>();
     if (v.size() == 2) fInclinationCut = v;
+  }
+
+  // ── CERN square/round hodoscope cheap YAML reads ────────────────────────
+  // Same "always read, gate channel resolution on needHodo" pattern as the
+  // legacy Hodo block above. See AUX.Hodoscope.SQUARE / AUX.Hodoscope.ROUND
+  // in config_general.yml.
+  auto loadNormVecN = [](const YAML::Node& node, std::vector<double>& dst) {
+    if (!node) return;
+    const auto v = node.as<std::vector<double>>();
+    if (v.size() != dst.size()) return;
+    for (size_t i = 0; i < dst.size(); ++i)
+      dst[i] = (v[i] > 1e-9) ? v[i] : 1.0;
+  };
+  auto loadThrVecN = [](const YAML::Node& node, std::vector<double>& dst) {
+    if (!node) return;
+    const auto v = node.as<std::vector<double>>();
+    if (v.size() != dst.size()) return;
+    dst = v;
+  };
+  // Concatenates two 16-entry layer arrays (layer1, layer2) into the
+  // 32-entry vectors used by fCID_RndHodo{X,Y} ([layer1 0..15, layer2 16..31]).
+  auto loadNormVecRound = [](const YAML::Node& layer1, const YAML::Node& layer2, std::vector<double>& dst) {
+    if (dst.size() != 32) return;
+    if (layer1) {
+      const auto v = layer1.as<std::vector<double>>();
+      if (v.size() == 16) for (int i = 0; i < 16; ++i) dst[i] = (v[i] > 1e-9) ? v[i] : 1.0;
+    }
+    if (layer2) {
+      const auto v = layer2.as<std::vector<double>>();
+      if (v.size() == 16) for (int i = 0; i < 16; ++i) dst[16 + i] = (v[i] > 1e-9) ? v[i] : 1.0;
+    }
+  };
+  auto loadThrVecRound = [](const YAML::Node& layer1, const YAML::Node& layer2, std::vector<double>& dst) {
+    if (dst.size() != 32) return;
+    if (layer1) {
+      const auto v = layer1.as<std::vector<double>>();
+      if (v.size() == 16) for (int i = 0; i < 16; ++i) dst[i] = v[i];
+    }
+    if (layer2) {
+      const auto v = layer2.as<std::vector<double>>();
+      if (v.size() == 16) for (int i = 0; i < 16; ++i) dst[16 + i] = v[i];
+    }
+  };
+
+  const auto nodeSqHodo = nodeHodo ? nodeHodo["SQUARE"] : YAML::Node();
+  if (nodeSqHodo) {
+    if (nodeSqHodo["CENTER"]) {
+      const auto c = nodeSqHodo["CENTER"].as<std::vector<double>>();
+      if (c.size() == 2) fSqHodoCenter = c;
+    }
+    if (nodeSqHodo["RANGE"]) {
+      const auto r = nodeSqHodo["RANGE"].as<std::vector<int>>();
+      if (r.size() == 2) { fSqHodoFirst = r[0]; fSqHodoLast = r[1]; }
+    }
+    if (nodeSqHodo["NORM_CONST_INTADC"]) {
+      loadNormVecN(nodeSqHodo["NORM_CONST_INTADC"]["SHX"], fSqHodoNormIntADC_X);
+      loadNormVecN(nodeSqHodo["NORM_CONST_INTADC"]["SHY"], fSqHodoNormIntADC_Y);
+    }
+    if (nodeSqHodo["NORM_CONST_PEAKADC"]) {
+      loadNormVecN(nodeSqHodo["NORM_CONST_PEAKADC"]["SHX"], fSqHodoNormPeakADC_X);
+      loadNormVecN(nodeSqHodo["NORM_CONST_PEAKADC"]["SHY"], fSqHodoNormPeakADC_Y);
+    }
+    if (nodeSqHodo["THRESHOLD_INTADC"]) {
+      loadThrVecN(nodeSqHodo["THRESHOLD_INTADC"]["SHX"], fSqHodoThrIntADC_X);
+      loadThrVecN(nodeSqHodo["THRESHOLD_INTADC"]["SHY"], fSqHodoThrIntADC_Y);
+    }
+    if (nodeSqHodo["THRESHOLD_PEAKADC"]) {
+      loadThrVecN(nodeSqHodo["THRESHOLD_PEAKADC"]["SHX"], fSqHodoThrPeakADC_X);
+      loadThrVecN(nodeSqHodo["THRESHOLD_PEAKADC"]["SHY"], fSqHodoThrPeakADC_Y);
+    }
+  }
+
+  const auto nodeRndHodo = nodeHodo ? nodeHodo["ROUND"] : YAML::Node();
+  if (nodeRndHodo) {
+    if (nodeRndHodo["CENTER"]) {
+      const auto c = nodeRndHodo["CENTER"].as<std::vector<double>>();
+      if (c.size() == 2) fRndHodoCenter = c;
+    }
+    if (nodeRndHodo["RANGE"]) {
+      const auto r = nodeRndHodo["RANGE"].as<std::vector<int>>();
+      if (r.size() == 2) { fRndHodoFirst = r[0]; fRndHodoLast = r[1]; }
+    }
+    if (nodeRndHodo["NORM_CONST_INTADC"]) {
+      loadNormVecRound(nodeRndHodo["NORM_CONST_INTADC"]["RH1X"], nodeRndHodo["NORM_CONST_INTADC"]["RH2X"], fRndHodoNormIntADC_X);
+      loadNormVecRound(nodeRndHodo["NORM_CONST_INTADC"]["RH1Y"], nodeRndHodo["NORM_CONST_INTADC"]["RH2Y"], fRndHodoNormIntADC_Y);
+    }
+    if (nodeRndHodo["NORM_CONST_PEAKADC"]) {
+      loadNormVecRound(nodeRndHodo["NORM_CONST_PEAKADC"]["RH1X"], nodeRndHodo["NORM_CONST_PEAKADC"]["RH2X"], fRndHodoNormPeakADC_X);
+      loadNormVecRound(nodeRndHodo["NORM_CONST_PEAKADC"]["RH1Y"], nodeRndHodo["NORM_CONST_PEAKADC"]["RH2Y"], fRndHodoNormPeakADC_Y);
+    }
+    if (nodeRndHodo["THRESHOLD_INTADC"]) {
+      loadThrVecRound(nodeRndHodo["THRESHOLD_INTADC"]["RH1X"], nodeRndHodo["THRESHOLD_INTADC"]["RH2X"], fRndHodoThrIntADC_X);
+      loadThrVecRound(nodeRndHodo["THRESHOLD_INTADC"]["RH1Y"], nodeRndHodo["THRESHOLD_INTADC"]["RH2Y"], fRndHodoThrIntADC_Y);
+    }
+    if (nodeRndHodo["THRESHOLD_PEAKADC"]) {
+      loadThrVecRound(nodeRndHodo["THRESHOLD_PEAKADC"]["RH1X"], nodeRndHodo["THRESHOLD_PEAKADC"]["RH2X"], fRndHodoThrPeakADC_X);
+      loadThrVecRound(nodeRndHodo["THRESHOLD_PEAKADC"]["RH1Y"], nodeRndHodo["THRESHOLD_PEAKADC"]["RH2Y"], fRndHodoThrPeakADC_Y);
+    }
   }
 
   // ── Hodoscope channel resolution + histograms (only if needed) ─────────
@@ -296,39 +622,155 @@ void TBaux::init() {
               << std::endl;
     fHodoEnabled = false;
   }
+
+  // ── CERN square hodoscope channel resolution + histograms ───────────────
+  // Gated on the same needHodo flag as the legacy 16x16 hodoscope: the web
+  // UI has a single "Hodo" checkbox that turns on all hodoscope plotting.
+  if (needHodo) {
+    fCID_SqHodoX.clear();
+    fCID_SqHodoY.clear();
+    fCID_SqHodoX.reserve(29);
+    fCID_SqHodoY.reserve(29);
+    for (int i = 1; i <= 29; ++i) fCID_SqHodoX.push_back(fUtility.GetCID("SHX" + std::to_string(i)));
+    for (int i = 1; i <= 29; ++i) fCID_SqHodoY.push_back(fUtility.GetCID("SHY" + std::to_string(i)));
+
+    bool sqAllValid = true;
+    for (const auto& c : fCID_SqHodoX) sqAllValid &= cidValid(c);
+    for (const auto& c : fCID_SqHodoY) sqAllValid &= cidValid(c);
+    fSqHodoEnabled = sqAllValid;
+
+    if (!sqAllValid) {
+      std::cout << "[TBaux] Square-hodoscope channels missing from the loaded "
+                << "mapping (SHX1..29 / SHY1..29); square hodoscope AUX plot "
+                << "will be skipped." << std::endl;
+    } else {
+      for (const auto& c : fCID_SqHodoX) fCIDtoPlot.push_back(c);
+      for (const auto& c : fCID_SqHodoY) fCIDtoPlot.push_back(c);
+
+      // Active area is 29x29 mm, fiber i covers [i-1, i) -> raw fiber
+      // centers run 0.5..28.5. Histogram axis is fixed at [-14.5, +14.5]
+      // (half of 29 mm); AUX.Hodoscope.SQUARE.CENTER only shifts which raw
+      // position maps to 0 (default = active-area center = no shift).
+      const double half = 14.5;
+      fSqHodoIntADC = new TH2F(
+        "hodoscope_sq_intADC",
+        (TString)"Run " + std::to_string(fRunNum) + " Square Hodoscope IntADC;X [mm];Y [mm];events",
+        29, -half, half, 29, -half, half);
+      fSqHodoIntADC->SetStats(0);
+
+      fSqHodoPeakADC = new TH2F(
+        "hodoscope_sq_peakADC",
+        (TString)"Run " + std::to_string(fRunNum) + " Square Hodoscope PeakADC;X [mm];Y [mm];events",
+        29, -half, half, 29, -half, half);
+      fSqHodoPeakADC->SetStats(0);
+
+      fCanvasSqHodoIntADC = new TCanvas("fCanvas_SqHodoIntADC", "fCanvas_SqHodoIntADC", 800, 800);
+      fCanvasSqHodoIntADC->cd()->SetRightMargin(0.13);
+
+      fCanvasSqHodoPeakADC = new TCanvas("fCanvas_SqHodoPeakADC", "fCanvas_SqHodoPeakADC", 800, 800);
+      fCanvasSqHodoPeakADC->cd()->SetRightMargin(0.13);
+    }
+  } else {
+    fSqHodoEnabled = false;
+  }
+
+  // ── CERN round hodoscope channel resolution + histograms ────────────────
+  if (needHodo) {
+    fCID_RndHodoX.clear();
+    fCID_RndHodoY.clear();
+    fCID_RndHodoX.reserve(32);
+    fCID_RndHodoY.reserve(32);
+    // Fixed order: layer 1 fibers 1..16, then layer 2 fibers 1..16 — kept
+    // consistent with GetRoundHodoRawPosition()'s index -> (layer, fiber)
+    // decoding (idx<16 -> layer1, else layer2; fiber = idx%16 + 1).
+    for (int layer = 1; layer <= 2; ++layer)
+      for (int i = 1; i <= 16; ++i)
+        fCID_RndHodoX.push_back(fUtility.GetCID("RH" + std::to_string(layer) + "X" + std::to_string(i)));
+    for (int layer = 1; layer <= 2; ++layer)
+      for (int i = 1; i <= 16; ++i)
+        fCID_RndHodoY.push_back(fUtility.GetCID("RH" + std::to_string(layer) + "Y" + std::to_string(i)));
+
+    bool rndAllValid = true;
+    for (const auto& c : fCID_RndHodoX) rndAllValid &= cidValid(c);
+    for (const auto& c : fCID_RndHodoY) rndAllValid &= cidValid(c);
+    fRndHodoEnabled = rndAllValid;
+
+    if (!rndAllValid) {
+      std::cout << "[TBaux] Round-hodoscope channels missing from the loaded "
+                << "mapping (RH1X/RH1Y/RH2X/RH2Y 1..16); round hodoscope AUX "
+                << "plot will be skipped." << std::endl;
+    } else {
+      for (const auto& c : fCID_RndHodoX) fCIDtoPlot.push_back(c);
+      for (const auto& c : fCID_RndHodoY) fCIDtoPlot.push_back(c);
+
+      // Active area is 16.5x16.5 mm (layer 1 covers 0-16 mm, layer 2 is
+      // offset by half a fiber and covers 0.5-16.5 mm), 0.5 mm bins.
+      // Histogram axis is fixed at [-8.25, +8.25]; CENTER only shifts the
+      // raw-position origin (default = active-area center = no shift).
+      constexpr double kActive = 16.5;
+      constexpr int nBins = 33;
+      const double half = kActive / 2.0;
+
+      fRndHodoIntADC = new TH2F(
+        "hodoscope_rnd_intADC",
+        (TString)"Run " + std::to_string(fRunNum) + " Round Hodoscope IntADC;X [mm];Y [mm];events",
+        nBins, -half, half, nBins, -half, half);
+      fRndHodoIntADC->SetStats(0);
+
+      fRndHodoPeakADC = new TH2F(
+        "hodoscope_rnd_peakADC",
+        (TString)"Run " + std::to_string(fRunNum) + " Round Hodoscope PeakADC;X [mm];Y [mm];events",
+        nBins, -half, half, nBins, -half, half);
+      fRndHodoPeakADC->SetStats(0);
+
+      fCanvasRndHodoIntADC = new TCanvas("fCanvas_RndHodoIntADC", "fCanvas_RndHodoIntADC", 800, 800);
+      fCanvasRndHodoIntADC->cd()->SetRightMargin(0.13);
+
+      fCanvasRndHodoPeakADC = new TCanvas("fCanvas_RndHodoPeakADC", "fCanvas_RndHodoPeakADC", 800, 800);
+      fCanvasRndHodoPeakADC->cd()->SetRightMargin(0.13);
+    }
+  } else {
+    fRndHodoEnabled = false;
+  }
 }
 
 void TBaux::SetParticle(std::string fParticle_) {
 
   fParticle = fParticle_;
 
-  // if (fParticle == "PION") {
-  //   fCC1cut = fNodeAux["PION"]["CC1"].as<double>(); 
-  //   fCC2cut = fNodeAux["PION"]["CC2"].as<double>();
-  //   fPSInitCut = fNodeAux["PION"]["PS_INIT"].as<double>();
-  //   fPSFinCut = fNodeAux["PION"]["PS_FIN"].as<double>();
-  // }
+  // Restored from TB2025: AUX.<PARTICLE>.{CC1,CC2,PS_INIT,PS_FIN}, used by
+  // the DWCPID --AUXcut mode (see IsPassing()). Any particle name is
+  // accepted here (not just PION/KAON/PROTON) as long as config_general.yml
+  // has a matching top-level AUX.<name> block; unknown names just print a
+  // warning and leave the previous (or default) cut values untouched.
+  const auto nodeParticle = fNodeAux[fParticle];
+  if (!nodeParticle) {
+    if (fParticle != "null" && !fParticle.empty()) {
+      std::cout << "[TBaux] --particle '" << fParticle << "' has no AUX." << fParticle
+                << " block in config_general.yml; keeping previous/default PID cut values."
+                << std::endl;
+    }
+    return;
+  }
 
-  // if (fParticle == "KAON") {
-  //   fCC1cut = fNodeAux["KAON"]["CC1"].as<double>();
-  //   fCC2cut = fNodeAux["KAON"]["CC2"].as<double>();
-  //   fPSInitCut = fNodeAux["KAON"]["PS_INIT"].as<double>();
-  //   fPSFinCut = fNodeAux["KAON"]["PS_FIN"].as<double>();
-  // }
-
-  // if (fParticle == "PROTON") {
-  //   fCC1cut = fNodeAux["PROTON"]["CC1"].as<double>();
-  //   fCC2cut = fNodeAux["PROTON"]["CC2"].as<double>();
-  //   fPSInitCut = fNodeAux["PROTON"]["PS_INIT"].as<double>();
-  //   fPSFinCut = fNodeAux["PROTON"]["PS_FIN"].as<double>();
-  // }
+  if (nodeParticle["CC1"])     fCC1cut    = nodeParticle["CC1"].as<double>();
+  if (nodeParticle["CC2"])     fCC2cut    = nodeParticle["CC2"].as<double>();
+  if (nodeParticle["PS_INIT"]) fPSInitCut = nodeParticle["PS_INIT"].as<double>();
+  if (nodeParticle["PS_FIN"])  fPSFinCut  = nodeParticle["PS_FIN"].as<double>();
 }
 
 void TBaux::SetRange(const YAML::Node tConfigNode) {
 
-  // Reserved for future per-channel range configuration (e.g., WCX/WCY windows)
-  // Example usage:
-  // fRangeMap.insert(std::make_pair("WCX", tConfigNode["WCX"].as<std::vector<int>>()));
+  // PID integration windows (PS, MC, TC, CC1, CC2), restored from TB2025.
+  // Read straight from ModuleConfig so there is a single source of truth
+  // shared with `--type single --module PS` etc. Missing entries simply
+  // leave that channel out of fRangeMap, and GetPIDValue()/Fill() skip it.
+  for (const std::string& name : {"PS", "MC", "TC", "CC1", "CC2"}) {
+    if (tConfigNode[name]) {
+      const auto r = tConfigNode[name].as<std::vector<int>>();
+      if (r.size() == 2) fRangeMap[name] = r;
+    }
+  }
 
   // Per-fiber search windows. Read ModuleConfig.HX1..HX16 / HY1..HY16 (the
   // same entries TBplotengine uses for `--type single --module HX1`, so
@@ -429,6 +871,47 @@ std::vector<float> TBaux::GetPosition(const std::vector<std::vector<float>>& wav
   return {posX, posY};
 }
 
+std::vector<float> TBaux::GetDWCPosition(const std::vector<std::vector<float>>& wave) {
+
+  // wave order: DWC1R, DWC1L, DWC1U, DWC1D, DWC2R, DWC2L, DWC2U, DWC2D
+  if (wave.size() < 8)
+    return {};
+
+  auto binToTime = [](float bin) {
+    return 800.f * (bin / 1000.f);
+  };
+
+  std::vector<float> times;
+  times.reserve(8);
+  for (const auto& w : wave) {
+    const float bin = GetLeadingEdgeBin(w, static_cast<float>(fDWCThreshold));
+    if (bin < 0) return {};
+    times.push_back(binToTime(bin));
+  }
+
+  // Ported from TB2025 (see also DQM/function.h::getDWC1position /
+  // getDWC2position, which carry the same constants for the legacy
+  // standalone draw_*.cc tools).
+  const float dwc1X = (times.at(0) - times.at(1)) * static_cast<float>(fDWCCalib.at(0)) + static_cast<float>(fDWCCalib.at(1));
+  const float dwc1Y = (times.at(2) - times.at(3)) * static_cast<float>(fDWCCalib.at(2)) + static_cast<float>(fDWCCalib.at(3));
+  const float dwc2X = (times.at(4) - times.at(5)) * static_cast<float>(fDWCCalib.at(4)) + static_cast<float>(fDWCCalib.at(5));
+  const float dwc2Y = (times.at(6) - times.at(7)) * static_cast<float>(fDWCCalib.at(6)) + static_cast<float>(fDWCCalib.at(7));
+
+  return {
+    dwc1X - static_cast<float>(fDWCCenter.at(0)),
+    dwc1Y - static_cast<float>(fDWCCenter.at(1)),
+    dwc2X - static_cast<float>(fDWCCenter.at(2)),
+    dwc2Y - static_cast<float>(fDWCCenter.at(3)),
+  };
+}
+
+double TBaux::GetPIDValue(TBevt<TBwaveform> anEvent, const TBcid& cid, const std::string& name) {
+  const auto it = fRangeMap.find(name);
+  if (it == fRangeMap.end() || it->second.size() != 2) return -999.;
+  const std::vector<short> wf = anEvent.GetData(cid).waveform();
+  return GetValue(wf, it->second.at(0), it->second.at(1), name);
+}
+
 void TBaux::Fill(TBevt<TBwaveform> anEvent) {
 
   // ── Wire chamber position ───────────────────────────────────────────────
@@ -451,9 +934,48 @@ void TBaux::Fill(TBevt<TBwaveform> anEvent) {
       fWCPosition->Fill(posVec.at(0), posVec.at(1));
   }
 
+  // ── DWC position ─────────────────────────────────────────────────────────
+  if (fDWCEnabled && fDWC1Pos) {
+    std::vector<std::vector<float>> dwcWaves;
+    dwcWaves.reserve(8);
+    dwcWaves.push_back(anEvent.GetData(fCID_DWC1R).pedcorrectedWaveform(PedBinsForChannel("DWC1R")));
+    dwcWaves.push_back(anEvent.GetData(fCID_DWC1L).pedcorrectedWaveform(PedBinsForChannel("DWC1L")));
+    dwcWaves.push_back(anEvent.GetData(fCID_DWC1U).pedcorrectedWaveform(PedBinsForChannel("DWC1U")));
+    dwcWaves.push_back(anEvent.GetData(fCID_DWC1D).pedcorrectedWaveform(PedBinsForChannel("DWC1D")));
+    dwcWaves.push_back(anEvent.GetData(fCID_DWC2R).pedcorrectedWaveform(PedBinsForChannel("DWC2R")));
+    dwcWaves.push_back(anEvent.GetData(fCID_DWC2L).pedcorrectedWaveform(PedBinsForChannel("DWC2L")));
+    dwcWaves.push_back(anEvent.GetData(fCID_DWC2U).pedcorrectedWaveform(PedBinsForChannel("DWC2U")));
+    dwcWaves.push_back(anEvent.GetData(fCID_DWC2D).pedcorrectedWaveform(PedBinsForChannel("DWC2D")));
+
+    const auto dwcPos = GetDWCPosition(dwcWaves);
+    if (dwcPos.size() == 4) {
+      fDWC1Pos->Fill(dwcPos.at(0), dwcPos.at(1));
+      if (fDWC2Pos) fDWC2Pos->Fill(dwcPos.at(2), dwcPos.at(3));
+      if (fDWCXCorr) fDWCXCorr->Fill(dwcPos.at(0), dwcPos.at(2));
+      if (fDWCYCorr) fDWCYCorr->Fill(dwcPos.at(1), dwcPos.at(3));
+    }
+  }
+
+  // ── PID (PS, MC, TC, CC1, CC2) ───────────────────────────────────────────
+  if (fPIDEnabled && fPS) {
+    if (fRangeMap.count("PS"))  fPS->Fill(GetPIDValue(anEvent, fCID_PS, "PS"));
+    if (fRangeMap.count("MC"))  fMC->Fill(GetPIDValue(anEvent, fCID_MC, "MC"));
+    if (fRangeMap.count("TC"))  fTC->Fill(GetPIDValue(anEvent, fCID_TC, "TC"));
+    if (fRangeMap.count("CC1")) fCC1->Fill(GetPIDValue(anEvent, fCID_CC1, "CC1"));
+    if (fRangeMap.count("CC2")) fCC2->Fill(GetPIDValue(anEvent, fCID_CC2, "CC2"));
+  }
+
   // ── Hodoscope (16x16 IntADC and PeakADC maxima) ─────────────────────────
   if (fHodoEnabled)
     FillHodoscope(anEvent);
+
+  // ── CERN square hodoscope (29x29, 1 mm resolution) ──────────────────────
+  if (fSqHodoEnabled)
+    FillSquareHodoscope(anEvent);
+
+  // ── CERN round hodoscope (2-layer, 0.5 mm resolution) ───────────────────
+  if (fRndHodoEnabled)
+    FillRoundHodoscope(anEvent);
 }
 
 std::vector<float> TBaux::GetHodoscopeRawPosition(TBevt<TBwaveform> anEvent) {
@@ -540,8 +1062,259 @@ void TBaux::FillHodoscope(TBevt<TBwaveform> anEvent) {
   if (fHodoPeakADC_corr) fHodoPeakADC_corr->Fill(corrX_peak, corrY_peak, 1);
 }
 
+void TBaux::GetSquareHodoRawPosition(TBevt<TBwaveform> anEvent,
+                                      bool& foundInt, float& xInt, float& yInt,
+                                      bool& foundPeak, float& xPeak, float& yPeak) {
+  foundInt = false;
+  foundPeak = false;
+  if (!fSqHodoEnabled) return;
+  if (fCID_SqHodoX.size() != 29 || fCID_SqHodoY.size() != 29) return;
+
+  int bestXIdxInt = -1, bestYIdxInt = -1, bestXIdxPeak = -1, bestYIdxPeak = -1;
+  double bestXValInt = -1e300, bestYValInt = -1e300, bestXValPeak = -1e300, bestYValPeak = -1e300;
+
+  for (int i = 0; i < 29; ++i) {
+    const std::string nameX = "SHX" + std::to_string(i + 1);
+    const std::string nameY = "SHY" + std::to_string(i + 1);
+    const int pedBinsX = PedBinsForChannel(nameX);
+    const int pedBinsY = PedBinsForChannel(nameY);
+
+    const std::vector<short> wfX = anEvent.GetData(fCID_SqHodoX[i]).waveform();
+    const std::vector<short> wfY = anEvent.GetData(fCID_SqHodoY[i]).waveform();
+    if (wfX.size() <= static_cast<size_t>(fSqHodoLast) || wfY.size() <= static_cast<size_t>(fSqHodoLast)) continue;
+
+    const double rawXInt  = GetIntADC (wfX, fSqHodoFirst, fSqHodoLast, pedBinsX);
+    const double rawYInt  = GetIntADC (wfY, fSqHodoFirst, fSqHodoLast, pedBinsY);
+    const double rawXPeak = GetPeakADC(wfX, fSqHodoFirst, fSqHodoLast, pedBinsX);
+    const double rawYPeak = GetPeakADC(wfY, fSqHodoFirst, fSqHodoLast, pedBinsY);
+
+    // Above-threshold max search: a fiber only enters the running max if
+    // its RAW ADC clears its own per-fiber threshold ("over pedestal" hit
+    // requirement). Normalization is applied only to survivors.
+    if (rawXInt > fSqHodoThrIntADC_X[i]) {
+      const double c = rawXInt / fSqHodoNormIntADC_X[i];
+      if (c > bestXValInt) { bestXValInt = c; bestXIdxInt = i; }
+    }
+    if (rawYInt > fSqHodoThrIntADC_Y[i]) {
+      const double c = rawYInt / fSqHodoNormIntADC_Y[i];
+      if (c > bestYValInt) { bestYValInt = c; bestYIdxInt = i; }
+    }
+    if (rawXPeak > fSqHodoThrPeakADC_X[i]) {
+      const double c = rawXPeak / fSqHodoNormPeakADC_X[i];
+      if (c > bestXValPeak) { bestXValPeak = c; bestXIdxPeak = i; }
+    }
+    if (rawYPeak > fSqHodoThrPeakADC_Y[i]) {
+      const double c = rawYPeak / fSqHodoNormPeakADC_Y[i];
+      if (c > bestYValPeak) { bestYValPeak = c; bestYIdxPeak = i; }
+    }
+  }
+
+  // Only report a position if BOTH X and Y had a fiber above threshold;
+  // otherwise the event is skipped for that metric (low hodoscope
+  // efficiency means a fraction of events will have no real hit).
+  if (bestXIdxInt >= 0 && bestYIdxInt >= 0) {
+    foundInt = true;
+    xInt = bestXIdxInt + 0.5f;
+    yInt = bestYIdxInt + 0.5f;
+  }
+  if (bestXIdxPeak >= 0 && bestYIdxPeak >= 0) {
+    foundPeak = true;
+    xPeak = bestXIdxPeak + 0.5f;
+    yPeak = bestYIdxPeak + 0.5f;
+  }
+}
+
+void TBaux::FillSquareHodoscope(TBevt<TBwaveform> anEvent) {
+  if (!fSqHodoIntADC || !fSqHodoPeakADC) return;
+
+  bool foundInt = false, foundPeak = false;
+  float xInt = 0, yInt = 0, xPeak = 0, yPeak = 0;
+  GetSquareHodoRawPosition(anEvent, foundInt, xInt, yInt, foundPeak, xPeak, yPeak);
+
+  if (foundInt)  fSqHodoIntADC ->Fill(xInt  - fSqHodoCenter[0], yInt  - fSqHodoCenter[1], 1);
+  if (foundPeak) fSqHodoPeakADC->Fill(xPeak - fSqHodoCenter[0], yPeak - fSqHodoCenter[1], 1);
+}
+
+void TBaux::GetRoundHodoRawPosition(TBevt<TBwaveform> anEvent,
+                                     bool& foundInt, float& xLowInt, float& yLowInt,
+                                     bool& foundPeak, float& xLowPeak, float& yLowPeak) {
+  foundInt = false;
+  foundPeak = false;
+  if (!fRndHodoEnabled) return;
+  if (fCID_RndHodoX.size() != 32 || fCID_RndHodoY.size() != 32) return;
+
+  int bestXIdxInt = -1, bestYIdxInt = -1, bestXIdxPeak = -1, bestYIdxPeak = -1;
+  double bestXValInt = -1e300, bestYValInt = -1e300, bestXValPeak = -1e300, bestYValPeak = -1e300;
+
+  for (int i = 0; i < 32; ++i) {
+    // idx 0..15 -> layer 1 fiber (i+1); idx 16..31 -> layer 2 fiber (i-15).
+    const int layer = (i < 16) ? 1 : 2;
+    const int fiber1 = (i % 16) + 1;
+    const std::string nameX = "RH" + std::to_string(layer) + "X" + std::to_string(fiber1);
+    const std::string nameY = "RH" + std::to_string(layer) + "Y" + std::to_string(fiber1);
+    const int pedBinsX = PedBinsForChannel(nameX);
+    const int pedBinsY = PedBinsForChannel(nameY);
+
+    const std::vector<short> wfX = anEvent.GetData(fCID_RndHodoX[i]).waveform();
+    const std::vector<short> wfY = anEvent.GetData(fCID_RndHodoY[i]).waveform();
+    if (wfX.size() <= static_cast<size_t>(fRndHodoLast) || wfY.size() <= static_cast<size_t>(fRndHodoLast)) continue;
+
+    const double rawXInt  = GetIntADC (wfX, fRndHodoFirst, fRndHodoLast, pedBinsX);
+    const double rawYInt  = GetIntADC (wfY, fRndHodoFirst, fRndHodoLast, pedBinsY);
+    const double rawXPeak = GetPeakADC(wfX, fRndHodoFirst, fRndHodoLast, pedBinsX);
+    const double rawYPeak = GetPeakADC(wfY, fRndHodoFirst, fRndHodoLast, pedBinsY);
+
+    // Max search spans BOTH layers together: if a layer-1 and a layer-2
+    // fiber both fire, the higher-ADC one wins (per-fiber threshold still
+    // gates entry into the running max).
+    if (rawXInt > fRndHodoThrIntADC_X[i]) {
+      const double c = rawXInt / fRndHodoNormIntADC_X[i];
+      if (c > bestXValInt) { bestXValInt = c; bestXIdxInt = i; }
+    }
+    if (rawYInt > fRndHodoThrIntADC_Y[i]) {
+      const double c = rawYInt / fRndHodoNormIntADC_Y[i];
+      if (c > bestYValInt) { bestYValInt = c; bestYIdxInt = i; }
+    }
+    if (rawXPeak > fRndHodoThrPeakADC_X[i]) {
+      const double c = rawXPeak / fRndHodoNormPeakADC_X[i];
+      if (c > bestXValPeak) { bestXValPeak = c; bestXIdxPeak = i; }
+    }
+    if (rawYPeak > fRndHodoThrPeakADC_Y[i]) {
+      const double c = rawYPeak / fRndHodoNormPeakADC_Y[i];
+      if (c > bestYValPeak) { bestYValPeak = c; bestYIdxPeak = i; }
+    }
+  }
+
+  // Lower edge (mm) of a fiber's 1 mm footprint: layer-1 fiber n covers
+  // [n-1, n], layer-2 fiber n covers [n-0.5, n+0.5] (idx encodes both
+  // layer and fiber — see the (layer, fiber1) decoding above).
+  auto footprintLow = [](int idx) -> float {
+    const int layer = (idx < 16) ? 1 : 2;
+    const int idx0 = idx % 16;
+    return static_cast<float>(idx0) + (layer == 2 ? 0.5f : 0.0f);
+  };
+
+  if (bestXIdxInt >= 0 && bestYIdxInt >= 0) {
+    foundInt = true;
+    xLowInt = footprintLow(bestXIdxInt);
+    yLowInt = footprintLow(bestYIdxInt);
+  }
+  if (bestXIdxPeak >= 0 && bestYIdxPeak >= 0) {
+    foundPeak = true;
+    xLowPeak = footprintLow(bestXIdxPeak);
+    yLowPeak = footprintLow(bestYIdxPeak);
+  }
+}
+
+void TBaux::FillRoundHodoscope(TBevt<TBwaveform> anEvent) {
+  if (!fRndHodoIntADC || !fRndHodoPeakADC) return;
+
+  bool foundInt = false, foundPeak = false;
+  float xLowInt = 0, yLowInt = 0, xLowPeak = 0, yLowPeak = 0;
+  GetRoundHodoRawPosition(anEvent, foundInt, xLowInt, yLowInt, foundPeak, xLowPeak, yLowPeak);
+
+  // The winning fiber's 1 mm footprint always spans exactly two 0.5 mm
+  // bins on each axis, so a 2D hit fills the 2x2 block of bins (4 Fill
+  // calls, weight 1 each): e.g. X footprint [2.5, 3.5] -> bins centered
+  // at 2.75 and 3.25.
+  if (foundInt) {
+    const double x = xLowInt - fRndHodoCenter[0];
+    const double y = yLowInt - fRndHodoCenter[1];
+    fRndHodoIntADC->Fill(x + 0.25, y + 0.25, 1);
+    fRndHodoIntADC->Fill(x + 0.25, y + 0.75, 1);
+    fRndHodoIntADC->Fill(x + 0.75, y + 0.25, 1);
+    fRndHodoIntADC->Fill(x + 0.75, y + 0.75, 1);
+  }
+  if (foundPeak) {
+    const double x = xLowPeak - fRndHodoCenter[0];
+    const double y = yLowPeak - fRndHodoCenter[1];
+    fRndHodoPeakADC->Fill(x + 0.25, y + 0.25, 1);
+    fRndHodoPeakADC->Fill(x + 0.25, y + 0.75, 1);
+    fRndHodoPeakADC->Fill(x + 0.75, y + 0.25, 1);
+    fRndHodoPeakADC->Fill(x + 0.75, y + 0.75, 1);
+  }
+}
+
+bool TBaux::PassPIDCuts(TBevt<TBwaveform> anEvent) {
+  const double mcPeak  = GetPIDValue(anEvent, fCID_MC,  "MC");
+  const double psPeak  = GetPIDValue(anEvent, fCID_PS,  "PS");
+  const double cc1Peak = GetPIDValue(anEvent, fCID_CC1, "CC1");
+  const double cc2Peak = GetPIDValue(anEvent, fCID_CC2, "CC2");
+
+  if (mcPeak < fMCVetoThreshold) return false;
+
+  if (fParticle == "PION" || fParticle == "KAON") {
+    if (!(psPeak >= fPSInitCut && psPeak <= fPSFinCut)) return false;
+    if (fCC1cut >= 0 && !(cc1Peak > fCC1cut)) return false;
+    if (fCC2cut >= 0 && !(cc2Peak < fCC2cut)) return false;
+  } else if (fParticle == "PROTON") {
+    if (!(psPeak >= fPSInitCut && psPeak <= fPSFinCut)) return false;
+    if (fCC2cut >= 0 && !(cc2Peak > fCC2cut)) return false;
+  } else {
+    // No --particle given: fall back to the plain PS threshold.
+    if (!(psPeak >= fPSThreshold)) return false;
+  }
+  return true;
+}
+
 bool TBaux::IsPassing(TBevt<TBwaveform> anEvent) {
 
+  // ── PID-only cut mode (no DWC / position requirement at all) ────────────
+  // This is the fallback for years/runs where DWC is not available: same
+  // MC veto + PS/CC1/CC2 particle-ID logic as the PID half of "DWCPID",
+  // just without requiring a DWC position/correlation cut.
+  if (fAuxCutMode == "PID") {
+    if (!fPIDEnabled) return true; // degrade gracefully, like fWCEnabled above
+    return PassPIDCuts(anEvent);
+  }
+
+  // ── DWC / DWCPID cut modes (restored from TB2025) ───────────────────────
+  // These are independent of the WC branch below — important for CERN,
+  // where there is no wire chamber at all. If DWC (or PID, for DWCPID)
+  // channels are missing from the mapping, the cut is a no-op (events
+  // pass through); the warning was already printed once at init time.
+  if (fAuxCutMode == "DWC" || fAuxCutMode == "DWCPID") {
+
+    if (!fDWCEnabled) return true;
+
+    std::vector<std::vector<float>> dwcWaves;
+    dwcWaves.reserve(8);
+    dwcWaves.push_back(anEvent.GetData(fCID_DWC1R).pedcorrectedWaveform(PedBinsForChannel("DWC1R")));
+    dwcWaves.push_back(anEvent.GetData(fCID_DWC1L).pedcorrectedWaveform(PedBinsForChannel("DWC1L")));
+    dwcWaves.push_back(anEvent.GetData(fCID_DWC1U).pedcorrectedWaveform(PedBinsForChannel("DWC1U")));
+    dwcWaves.push_back(anEvent.GetData(fCID_DWC1D).pedcorrectedWaveform(PedBinsForChannel("DWC1D")));
+    dwcWaves.push_back(anEvent.GetData(fCID_DWC2R).pedcorrectedWaveform(PedBinsForChannel("DWC2R")));
+    dwcWaves.push_back(anEvent.GetData(fCID_DWC2L).pedcorrectedWaveform(PedBinsForChannel("DWC2L")));
+    dwcWaves.push_back(anEvent.GetData(fCID_DWC2U).pedcorrectedWaveform(PedBinsForChannel("DWC2U")));
+    dwcWaves.push_back(anEvent.GetData(fCID_DWC2D).pedcorrectedWaveform(PedBinsForChannel("DWC2D")));
+
+    const auto dwcPos = GetDWCPosition(dwcWaves); // {DWC1X, DWC1Y, DWC2X, DWC2Y}
+    if (dwcPos.size() != 4)
+      return false;
+
+    // (1) DWC1<->DWC2 correlation cut: reject events whose trajectory
+    // through DWC1 and DWC2 is inconsistent (scattered / multi-particle).
+    if (fDWCCorr > 0) {
+      if (std::abs(dwcPos.at(0) - dwcPos.at(2)) > fDWCCorr) return false;
+      if (std::abs(dwcPos.at(1) - dwcPos.at(3)) > fDWCCorr) return false;
+    }
+
+    // (2) Optional absolute beam-spot cut on DWC1 position.
+    if (fDWCPosCut > 0) {
+      if (std::abs(dwcPos.at(0)) > fDWCPosCut) return false;
+      if (std::abs(dwcPos.at(1)) > fDWCPosCut) return false;
+    }
+
+    // (3) DWCPID: additionally require the MC veto + PS/CC1/CC2 PID cuts.
+    if (fAuxCutMode == "DWCPID") {
+      if (!fPIDEnabled) return true; // degrade gracefully, like fWCEnabled above
+      if (!PassPIDCuts(anEvent)) return false;
+    }
+
+    return true;
+  }
+
+  // ── WC / WCHodo cut modes (legacy, unchanged) ───────────────────────────
   // If the loaded mapping has no WC, we cannot compute the beam-spot or the
   // WC↔Hodo inclination, so --AUXcut is a no-op (let every event through).
   // The warning was printed once at init time.
@@ -637,9 +1410,13 @@ void TBaux::Update() {
   // Either subsystem may have been skipped at init() time (--AUXMode WC
   // skips Hodo objects; --AUXMode Hodo skips WC objects). Return only
   // when nothing is active at all; otherwise draw what we have.
-  const bool hasWC   = fWCEnabled && fCanvas && fWCPosition;
-  const bool hasHodo = fHodoEnabled && fCanvasHodoIntADC && fHodoIntADC;
-  if (!hasWC && !hasHodo)
+  const bool hasWC      = fWCEnabled && fCanvas && fWCPosition;
+  const bool hasHodo    = fHodoEnabled && fCanvasHodoIntADC && fHodoIntADC;
+  const bool hasSqHodo  = fSqHodoEnabled && fCanvasSqHodoIntADC && fCanvasSqHodoPeakADC && fSqHodoIntADC;
+  const bool hasRndHodo = fRndHodoEnabled && fCanvasRndHodoIntADC && fCanvasRndHodoPeakADC && fRndHodoIntADC;
+  const bool hasDWC     = fDWCEnabled && fCanvasDWC && fDWC1Pos;
+  const bool hasPID     = fPIDEnabled && fCanvasPID && fPS;
+  if (!hasWC && !hasHodo && !hasSqHodo && !hasRndHodo && !hasDWC && !hasPID)
     return;
 
   if (fIsFirst) fIsFirst = false;
@@ -683,10 +1460,62 @@ void TBaux::Update() {
     if (fDraw) fCanvasHodoPeakADC_corr->Pad()->Draw();
   }
 
-  // ── Combined AUX ROOT file (WC + hodoscope, raw and corrected) ─────────
-  // Only write the subsystems that were actually allocated. A WC-only
+  if (hasSqHodo) {
+    fCanvasSqHodoIntADC->cd();
+    fSqHodoIntADC->Draw("colz");
+    fCanvasSqHodoIntADC->Update();
+    if (fDraw) fCanvasSqHodoIntADC->Pad()->Draw();
+
+    fCanvasSqHodoPeakADC->cd();
+    fSqHodoPeakADC->Draw("colz");
+    fCanvasSqHodoPeakADC->Update();
+    if (fDraw) fCanvasSqHodoPeakADC->Pad()->Draw();
+  }
+
+  if (hasRndHodo) {
+    fCanvasRndHodoIntADC->cd();
+    fRndHodoIntADC->Draw("colz");
+    fCanvasRndHodoIntADC->Update();
+    if (fDraw) fCanvasRndHodoIntADC->Pad()->Draw();
+
+    fCanvasRndHodoPeakADC->cd();
+    fRndHodoPeakADC->Draw("colz");
+    fCanvasRndHodoPeakADC->Update();
+    if (fDraw) fCanvasRndHodoPeakADC->Pad()->Draw();
+  }
+
+  if (hasDWC) {
+    fCanvasDWC->cd(1); fDWC1Pos->Draw("colz");
+    fCanvasDWC->cd(2); fDWC2Pos->Draw("colz");
+    fCanvasDWC->cd(3); fDWCXCorr->Draw("colz");
+    fCanvasDWC->cd(4); fDWCYCorr->Draw("colz");
+    fCanvasDWC->cd();
+    fCanvasDWC->Update();
+    if (fDraw) fCanvasDWC->Pad()->Draw();
+  }
+
+  if (hasPID) {
+    fCanvasPID->cd(1); fPS->Draw();
+    fCanvasPID->cd(2); fMC->Draw();
+    fCanvasPID->cd(3); fTC->Draw();
+    fCanvasPID->cd(4);
+    fCC1->Draw();
+    fCC2->Draw("sames");
+    TLegend* legPID = new TLegend(0.65, 0.7, 0.9, 0.9);
+    legPID->SetFillStyle(0);
+    legPID->SetBorderSize(0);
+    legPID->AddEntry(fCC1, "CC1", "l");
+    legPID->AddEntry(fCC2, "CC2", "l");
+    legPID->Draw();
+    fCanvasPID->cd();
+    fCanvasPID->Update();
+    if (fDraw) fCanvasPID->Pad()->Draw();
+  }
+
+  // ── Combined AUX ROOT file (WC + hodoscope + DWC + PID) ─────────────────
+  // Only write the subsystems that were actually allocated. E.g. a WC-only
   // run produces a file containing only fCanvas_WC + WC_Position; a
-  // Hodo-only run produces only the hodoscope canvases/histograms.
+  // DWC-only run produces only the DWC canvas/histograms.
   TString output = "./output/Run" + std::to_string(fRunNum) + "_AUX.root";
   if (fAuxCut) output = "./output/Run" + std::to_string(fRunNum) + "_AUX_AuxCut.root";
   {
@@ -706,6 +1535,33 @@ void TBaux::Update() {
       if (fHodoIntADC_corr)        fHodoIntADC_corr ->Write();
       if (fHodoPeakADC_corr)       fHodoPeakADC_corr->Write();
     }
+    if (hasSqHodo) {
+      fCanvasSqHodoIntADC->Write();
+      fCanvasSqHodoPeakADC->Write();
+      fSqHodoIntADC->Write();
+      fSqHodoPeakADC->Write();
+    }
+    if (hasRndHodo) {
+      fCanvasRndHodoIntADC->Write();
+      fCanvasRndHodoPeakADC->Write();
+      fRndHodoIntADC->Write();
+      fRndHodoPeakADC->Write();
+    }
+    if (hasDWC) {
+      fCanvasDWC->Write();
+      fDWC1Pos->Write();
+      fDWC2Pos->Write();
+      fDWCXCorr->Write();
+      fDWCYCorr->Write();
+    }
+    if (hasPID) {
+      fCanvasPID->Write();
+      fPS->Write();
+      fMC->Write();
+      fTC->Write();
+      fCC1->Write();
+      fCC2->Write();
+    }
     outoutFile.Close();
   }
 
@@ -718,6 +1574,12 @@ void TBaux::Update() {
   //   method=Hodoscope  → fCanvas_HodoPeakADC       (raw 16x16, PeakADC)
   //   method=Hodoscope  → fCanvas_HodoIntADC_corr   (center-corrected, IntADC)
   //   method=Hodoscope  → fCanvas_HodoPeakADC_corr  (center-corrected, PeakADC)
+  //   method=Hodoscope  → fCanvas_SqHodoIntADC      (CERN square 29x29, IntADC)
+  //   method=Hodoscope  → fCanvas_SqHodoPeakADC     (CERN square 29x29, PeakADC)
+  //   method=Hodoscope  → fCanvas_RndHodoIntADC     (CERN round 33x33, IntADC)
+  //   method=Hodoscope  → fCanvas_RndHodoPeakADC    (CERN round 33x33, PeakADC)
+  //   method=DWC        → fCanvas_DWC               (DWC1/2 position + correlation)
+  //   method=PID        → fCanvas_PID               (PS/MC/TC/CC1/CC2)
   // Each write is atomic (.tmp -> rename) so a polling LIVE viewer never
   // reads a half-written file.
   auto dumpJSON = [&](TCanvas* canvas, const std::string& methodPart) {
@@ -744,6 +1606,16 @@ void TBaux::Update() {
     dumpJSON(fCanvasHodoIntADC_corr,  "Hodoscope");
     dumpJSON(fCanvasHodoPeakADC_corr, "Hodoscope");
   }
+  if (hasSqHodo) {
+    dumpJSON(fCanvasSqHodoIntADC,  "Hodoscope");
+    dumpJSON(fCanvasSqHodoPeakADC, "Hodoscope");
+  }
+  if (hasRndHodo) {
+    dumpJSON(fCanvasRndHodoIntADC,  "Hodoscope");
+    dumpJSON(fCanvasRndHodoPeakADC, "Hodoscope");
+  }
+  if (hasDWC) dumpJSON(fCanvasDWC, "DWC");
+  if (hasPID) dumpJSON(fCanvasPID, "PID");
 
   // Process pending GUI events only when the canvas is actually being
   // displayed (--DRAW). In batch mode (web UI / scripted runs) we must
@@ -761,8 +1633,8 @@ void TBaux::SaveAs(TString output) {
   if (output == "")
     output = "./output/Run" + std::to_string(fRunNum) + "_AUX.root";
 
-  // Nothing to save if neither subsystem produced an object.
-  if (!fWCPosition && !fHodoIntADC)
+  // Nothing to save if no subsystem produced an object.
+  if (!fWCPosition && !fHodoIntADC && !fSqHodoIntADC && !fRndHodoIntADC && !fDWC1Pos && !fPS)
     return;
 
   TFile* outoutFile = new TFile(output, "RECREATE");
@@ -774,6 +1646,27 @@ void TBaux::SaveAs(TString output) {
     if (fHodoPeakADC)      fHodoPeakADC     ->Write();
     if (fHodoIntADC_corr)  fHodoIntADC_corr ->Write();
     if (fHodoPeakADC_corr) fHodoPeakADC_corr->Write();
+  }
+  if (fSqHodoEnabled) {
+    if (fSqHodoIntADC)  fSqHodoIntADC ->Write();
+    if (fSqHodoPeakADC) fSqHodoPeakADC->Write();
+  }
+  if (fRndHodoEnabled) {
+    if (fRndHodoIntADC)  fRndHodoIntADC ->Write();
+    if (fRndHodoPeakADC) fRndHodoPeakADC->Write();
+  }
+  if (fDWCEnabled) {
+    if (fDWC1Pos)  fDWC1Pos ->Write();
+    if (fDWC2Pos)  fDWC2Pos ->Write();
+    if (fDWCXCorr) fDWCXCorr->Write();
+    if (fDWCYCorr) fDWCYCorr->Write();
+  }
+  if (fPIDEnabled) {
+    if (fPS)  fPS ->Write();
+    if (fMC)  fMC ->Write();
+    if (fTC)  fTC ->Write();
+    if (fCC1) fCC1->Write();
+    if (fCC2) fCC2->Write();
   }
 
   outoutFile->Close();

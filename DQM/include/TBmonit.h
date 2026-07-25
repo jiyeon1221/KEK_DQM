@@ -21,6 +21,11 @@ public:
   void Loop();
   void LoopLive();
   void LoopAfterRun();
+  // AstroPix-only run: --type Astro. No TBread/TBplotengine/mapping at all
+  // -- just TBastro::Run() (synchronous) + Update(). Dispatched from
+  // Loop() before the LIVE/after-run branch, since it doesn't need any of
+  // the usual main-loop setup (run number + max event are all it needs).
+  void LoopAstroOnly();
 
   // void LoopFast(); //FIXME!! Fast engine should be integrated into TBplotengine, and work using template!!
 
@@ -49,6 +54,13 @@ private:
   bool fDraw;
   bool fAuxPlotting;
   bool fAuxCut;
+  // --Astro: draw the AstroPix 2D hitmap using TBastro/TBAstroReader, in a
+  // parallel thread alongside the main loop (LoopAfterRun only -- LIVE
+  // mode prints a warning and skips it, see TBastro's header comment for
+  // why: TBAstroReader has no chunked/next-file-waiting support yet).
+  // Independent of fAuxPlotting/fAuxCut -- AstroPix does not use the
+  // channel mapping or TBaux at all.
+  bool fAstro;
   // AUXcut mode: "WC" (default — WC beam-spot cut only) or "WCHodo"
   // (additionally applies the WC↔hodoscope inclination cut). Set via
   // --AUXCutMode and forwarded to TBaux::SetAUXCutMode().

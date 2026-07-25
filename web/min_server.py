@@ -180,24 +180,40 @@ async def api_dqm_runs():
     """List all runs available in the DQM output directory, grouped by run number."""
     import re as _re
     pattern = _re.compile(r'^Run(\d+)_(.+?)_(.+?)_((?:AuxCut_)?)(.+)\.json$')
+    # TBsingleWaveform's manifest doesn't fit the <type>_<method>_<canvas>
+    # scheme above (see the run-monit handler for details), so it's matched
+    # separately and folded into the same `runs` dict below.
+    waveform_pattern = _re.compile(r'^Run(\d+)_SingleWaveform\.json$')
     runs: dict[int, list] = {}
     for p in sorted(DQM_OUTPUT_DIR.glob("Run*_*.json")):
         m = pattern.match(p.name)
-        if not m:
+        if m:
+            run_num = int(m.group(1))
+            type_ = m.group(2)
+            method = m.group(3)
+            auxcut = bool(m.group(4))
+            canvas = m.group(5)
+            runs.setdefault(run_num, []).append({
+                "filename": p.name,
+                "canvas": canvas,
+                "type": type_,
+                "method": method,
+                "auxcut": auxcut,
+                "mtime": int(p.stat().st_mtime * 1000),
+            })
             continue
-        run_num = int(m.group(1))
-        type_ = m.group(2)
-        method = m.group(3)
-        auxcut = bool(m.group(4))
-        canvas = m.group(5)
-        runs.setdefault(run_num, []).append({
-            "filename": p.name,
-            "canvas": canvas,
-            "type": type_,
-            "method": method,
-            "auxcut": auxcut,
-            "mtime": int(p.stat().st_mtime * 1000),
-        })
+        wm = waveform_pattern.match(p.name)
+        if wm:
+            run_num = int(wm.group(1))
+            runs.setdefault(run_num, []).append({
+                "filename": p.name,
+                "canvas": "SingleWaveform",
+                "type": "single",
+                "method": "Waveform",
+                "auxcut": False,
+                "kind": "waveform",
+                "mtime": int(p.stat().st_mtime * 1000),
+            })
     result = []
     for run_num in sorted(runs.keys(), reverse=True):
         canvases = runs[run_num]
@@ -220,15 +236,25 @@ class MonitRequest(BaseModel):
     modules: List[str] = []
     max_event: Optional[int] = None
     flags: List[str] = []
-    # AUXcut mode (none / WC / WCHodo) chosen in the freeform UI dropdown.
-    # Anything other than "none" turns on --AUXcut and forwards
+    # AUXcut mode (none / PID / DWC / DWCPID; legacy WC / WCHodo still
+    # supported by TBaux but hidden from the UI) chosen in the freeform UI
+    # dropdown. Anything other than "none" turns on --AUXcut and forwards
     # --AUXCutMode <value> to monit.
     aux_cut_mode: Optional[str] = None
-    # AUX scope mode (WC / Hodo / WCHodo) — only meaningful when "AUX" is
-    # in flags. Forwarded as --AUXMode so TBaux::init() can skip loading
-    # the unused subsystem's MIDs (no MID 17 read when hodoscope is
-    # physically absent from the setup).
+    # AUX scope mode — a comma-separated subset of "Hodo,DWC,PID" built
+    # from the freeform UI's subsystem checkboxes, only meaningful when
+    # "AUX" is in flags. Forwarded verbatim as --AUXMode so TBaux::init()
+    # can skip loading the unused subsystems' MIDs (e.g. no MID 17 read
+    # when hodoscope is physically absent from the setup). "WC" is still a
+    # valid token for TBaux but has no UI checkbox — no wire chamber at
+    # CERN this year.
     aux_mode: Optional[str] = None
+    # --particle PION|KAON|PROTON, forwarded to TBaux::SetParticle(). Only
+    # affects the "DWCPID" --AUXCutMode; harmless (and forwarded) otherwise.
+    particle: Optional[str] = None
+    # --SkipEvent N, used by `--type single --method Waveform` to start the
+    # event-by-event waveform dump partway through the run.
+    skip_event: Optional[int] = None
 
 
 # ── Freeform LIVE process tracker (same behavior as main server) ──────────────
@@ -303,16 +329,21 @@ async def api_run_monit(req: MonitRequest):
         cmd.extend(["--module"] + req.modules)
     if req.max_event and req.max_event > 0:
         cmd.extend(["--MaxEvent", str(req.max_event)])
+    if req.skip_event is not None and req.skip_event > 0:
+        cmd.extend(["--SkipEvent", str(req.skip_event)])
     for flag in req.flags:
         if flag in ("LIVE", "AUXcut", "AUX"):
             cmd.append(f"--{flag}")
     if req.aux_cut_mode and req.aux_cut_mode != "none":
         cmd.extend(["--AUXCutMode", req.aux_cut_mode])
 
+    if req.particle and req.particle != "none":
+        cmd.extend(["--particle", req.particle])
+
     # Forward AUX scope only when --AUX is on. With this, TBaux can skip
-    # resolving HX/HY CIDs and pushing MID 17 into the reader's MID list
-    # when the operator picked "WC only" (hodoscope physically absent).
-    if "AUX" in req.flags and req.aux_mode in ("WC", "Hodo", "WCHodo"):
+    # resolving unused CIDs and pushing their MIDs into the reader's MID
+    # list when a subsystem is picked out of the checkbox list.
+    if "AUX" in req.flags and req.aux_mode:
         cmd.extend(["--AUXMode", req.aux_mode])
 
     generated_cmd = " ".join(cmd)
@@ -468,6 +499,21 @@ async def api_run_monit(req: MonitRequest):
                 "canvas": canvas,
                 "type": "AUX",
                 "method": method,
+            })
+
+    # `--type single --method Waveform` writes a manifest file instead of
+    # a JSROOT canvas JSON — surface it as a synthetic "waveform" canvas
+    # entry so the freeform viewer knows to render an image-sequence
+    # viewer instead. See web/server.py's run-monit handler for details.
+    if req.type == "single" and req.method == "Waveform":
+        wf_json = DQM_OUTPUT_DIR / f"Run{req.run_number}_SingleWaveform.json"
+        if wf_json.exists():
+            canvases.append({
+                "filename": wf_json.name,
+                "canvas": "SingleWaveform",
+                "type": req.type,
+                "method": req.method,
+                "kind": "waveform",
             })
 
     return {

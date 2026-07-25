@@ -33,6 +33,23 @@ DQM/build/
 DQM/lib/
 DQM/install/
 
+# CERN TB standalone 실행 파일 (소스 .cc만 추적)
+DQM/draw_astropix_CERN
+DQM/draw_hodoscope_CERN_round
+DQM/draw_hodoscope_CERN_square
+DQM/normalize_hodo_CERN
+
+# 표준 standalone 드로잉 결과물
+DQM/AstroPix/
+DQM/Avg/
+DQM/Hodoscope/
+
+# 참고용 외부 코드 스냅샷 (중첩 git 저장소)
+ref_for_cursor/
+
+# AstroPix 토이 데이터
+toy_astroPix/
+
 # 토이 데이터셋
 toydataset/
 

@@ -35,11 +35,28 @@ int main(int argc, char *argv[]) {
     int fMaxFile = -1;    
     std::vector<std::string> channel_names;
     std::string full_channel_name = "";
+    // Rescale the line-color palette to the actual number of channels (the
+    // default myColorPalette in function.h only has 9 entries and would
+    // throw std::out_of_range past that -- same fix as draw_wave.cc /
+    // draw_peakADC.cc for many-channel overlays like the full hodoscope).
+    myColorPalette.clear();
     for (int plot_args = 3; plot_args < argc; plot_args++) {
         channel_names.push_back(argv[plot_args]);
         full_channel_name += std::string(argv[plot_args]) + "_";
+        myColorPalette.push_back(gStyle->GetColorPalette(
+            (plot_args - 3) * ((float)gStyle->GetNumberOfColors() / ((float)argc - 3.))));
     }
     full_channel_name = full_channel_name.substr(0, full_channel_name.size() - 1);
+    // Guard against filesystem-unfriendly filenames when overlaying a large
+    // number of channels (e.g. all 122 hodoscope fibers at once). Keep the
+    // first/last channel name in the fallback so different channel sets of
+    // the same size (e.g. SHX1..29 vs SHY1..29) don't collide and silently
+    // overwrite each other's output.
+    if (full_channel_name.size() > 150 || channel_names.size() > 20) {
+        full_channel_name = channel_names.front() + "_to_" + channel_names.back()
+            + "_" + std::to_string(channel_names.size()) + "ch";
+    }
+    const bool drawLegend = (channel_names.size() <= 20);
     
     // Create output directory
     fs::path dir("./Avg");
@@ -48,8 +65,10 @@ int main(int argc, char *argv[]) {
     if (!(fs::exists(dir2))) fs::create_directory(dir2);
     
     // Load mapping
+    // Test mapping derived from test_Hodo.csv (round hodo MID 1=X,9=Y; square
+    // hodo MID 13=X,15=Y). Path is relative to CWD when running from DQM/.
     TButility util = TButility();
-    util.LoadMapping("../mapping/mapping_KEK.root");
+    util.LoadMapping("./mapping/mapping_test_Hodo.root");
     
     std::vector<TBcid> cids;
     std::vector<TH1F *> plots;
@@ -58,8 +77,9 @@ int main(int argc, char *argv[]) {
         cids.push_back(util.GetCID(channel_names.at(idx)));
     }
         
-    // MID: 3-7: PMT modules, MID 9: LC, MID 10: Aux(CC1, CC2, PS, TC, MC), MID 12: Triggers (T1, T2, T1NIM, T2NIM, Coin), MID 14-17: MCP micro, MID 18: DWC
-    TBread<TBwaveform> readerWave = TBread<TBwaveform>(fRunNum, fMaxEvent, fMaxFile, false, "/pnfs/knu.ac.kr/data/cms/store/user/sungwon/2025_KEK_TB_Data", {8, 9, 13});
+    // Round hodoscope test setup: MID 1 (X) + MID 9 (Y).
+    // Square hodoscope test setup: MID 13 (X) + MID 15 (Y).
+    TBread<TBwaveform> readerWave = TBread<TBwaveform>(fRunNum, fMaxEvent, fMaxFile, false, "/Volumes/yhep/scratch/YUdaq", {1, 9, 13, 15});
     
     // Set Maximum event
     if (fMaxEvent == -1 || fMaxEvent > readerWave.GetMaxEvent())
@@ -87,22 +107,51 @@ int main(int argc, char *argv[]) {
         
     TLegend *leg = new TLegend(0.75, 0.2, 0.9, 0.4);
 
+    // Auto-scale the shared y-range to the actual data spread instead of the
+    // fixed [1000,4096] full-ADC range -- with sparse per-fiber occupancy
+    // (e.g. a hodoscope fiber only fires in a fraction of events) the
+    // event-averaged dip is tiny and gets flattened out at full ADC scale.
+    double globalMin = 1e18, globalMax = -1e18;
+    for (auto* p : plots) {
+        globalMin = std::min(globalMin, p->GetMinimum());
+        globalMax = std::max(globalMax, p->GetMaximum());
+    }
+    const double margin = 0.1 * (globalMax - globalMin);
+    const double yLo = globalMin - margin;
+    const double yHi = globalMax + margin;
+
     for (int idx = 0; idx < plots.size(); idx++) {
         plots.at(idx)->SetLineWidth(2);
         plots.at(idx)->SetLineColor(myColorPalette.at(idx));
-        plots.at(idx)->GetYaxis()->SetRangeUser(1000, 4096);
+        plots.at(idx)->GetYaxis()->SetRangeUser(yLo, yHi);
         
         c->cd();
         if (idx == 0) plots.at(idx)->Draw("Hist");
         else plots.at(idx)->Draw("Hist & sames");
         
-        leg->AddEntry(plots.at(idx), channel_names.at(idx).c_str(), "l");
+        if (drawLegend) leg->AddEntry(plots.at(idx), channel_names.at(idx).c_str(), "l");
         c->Update();
     }
     
-    leg->Draw("sames");    
+    // Skip the legend for large channel counts (e.g. all 122 hodoscope
+    // fibers) -- it would badly overflow the fixed legend box and isn't
+    // readable anyway; the overlay itself still shows the aggregate timing.
+    if (drawLegend) leg->Draw("sames");
     c->Update();
-    c->SaveAs((TString)("./Avg/Run_" + std::to_string(fRunNum) + "/" + full_channel_name + ".png"));
-    
+    const std::string outBase = "./Avg/Run_" + std::to_string(fRunNum) + "/" + full_channel_name;
+    c->SaveAs((TString)(outBase + ".png"));
+
+    // Also write a ROOT file with the canvas + every individual per-channel
+    // histogram, so it can be reopened (e.g. TBrowser, or `new TCanvas` +
+    // `->Draw()`) and zoomed/panned interactively instead of being limited
+    // to the flattened auto-scaled PNG.
+    TFile *outRoot = new TFile((TString)(outBase + ".root"), "RECREATE");
+    outRoot->cd();
+    c->Write("c_overlay");
+    for (int idx = 0; idx < plots.size(); idx++) plots.at(idx)->Write();
+    outRoot->Close();
+    std::cout << "\n[draw_Avg] Wrote " << outBase << ".root ("
+              << plots.size() << " channel histograms + overlay canvas)\n";
+
     return 0;
 }

@@ -277,24 +277,40 @@ async def api_dqm_runs():
     """List all runs available in the DQM output directory, grouped by run number."""
     import re as _re
     pattern = _re.compile(r'^Run(\d+)_(.+?)_(.+?)_((?:AuxCut_)?)(.+)\.json$')
+    # TBsingleWaveform's manifest doesn't fit the <type>_<method>_<canvas>
+    # scheme above (see the run-monit handler for details), so it's matched
+    # separately and folded into the same `runs` dict below.
+    waveform_pattern = _re.compile(r'^Run(\d+)_SingleWaveform\.json$')
     runs: dict[int, list] = {}
     for p in sorted(DQM_OUTPUT_DIR.glob("Run*_*.json")):
         m = pattern.match(p.name)
-        if not m:
+        if m:
+            run_num = int(m.group(1))
+            type_ = m.group(2)
+            method = m.group(3)
+            auxcut = bool(m.group(4))
+            canvas = m.group(5)
+            runs.setdefault(run_num, []).append({
+                "filename": p.name,
+                "canvas": canvas,
+                "type": type_,
+                "method": method,
+                "auxcut": auxcut,
+                "mtime": int(p.stat().st_mtime * 1000),
+            })
             continue
-        run_num = int(m.group(1))
-        type_ = m.group(2)
-        method = m.group(3)
-        auxcut = bool(m.group(4))
-        canvas = m.group(5)
-        runs.setdefault(run_num, []).append({
-            "filename": p.name,
-            "canvas": canvas,
-            "type": type_,
-            "method": method,
-            "auxcut": auxcut,
-            "mtime": int(p.stat().st_mtime * 1000),
-        })
+        wm = waveform_pattern.match(p.name)
+        if wm:
+            run_num = int(wm.group(1))
+            runs.setdefault(run_num, []).append({
+                "filename": p.name,
+                "canvas": "SingleWaveform",
+                "type": "single",
+                "method": "Waveform",
+                "auxcut": False,
+                "kind": "waveform",
+                "mtime": int(p.stat().st_mtime * 1000),
+            })
     result = []
     for run_num in sorted(runs.keys(), reverse=True):
         canvases = runs[run_num]
@@ -478,21 +494,33 @@ class MonitRequest(BaseModel):
     max_event: Optional[int] = None
     flags: List[str] = []
     # AUXcut mode chosen in the freeform UI dropdown:
-    #   "none"   → no AUX cut (no --AUXcut)
-    #   "WC"     → WC-only beam-spot cut    (--AUXcut --AUXCutMode WC)
-    #   "WCHodo" → WC + hodoscope correlation cut (--AUXcut --AUXCutMode WCHodo)
+    #   "none"    → no AUX cut (no --AUXcut)
+    #   "PID"     → MC veto + PS/CC1/CC2 particle-ID cuts, no position cut
+    #               (--AUXcut --AUXCutMode PID) — use when DWC is unavailable
+    #   "DWC"     → DWC1<->DWC2 correlation cut         (--AUXcut --AUXCutMode DWC)
+    #   "DWCPID"  → DWC cut + MC veto + PS/CC PID cuts  (--AUXcut --AUXCutMode DWCPID)
+    # "WC"/"WCHodo" (legacy wire-chamber cuts) are still supported by TBaux
+    # but hidden from the freeform UI — no wire chamber at CERN this year.
     # The flags list also carries "AUXcut" when mode != "none" so the rest
     # of the pipeline (filename suffixes, run-history badges) keeps working.
     aux_cut_mode: Optional[str] = None
-    # AUX scope mode (only meaningful when "AUX" is in flags):
-    #   "WC"     → plot only Wire-Chamber position    (--AUXMode WC)
-    #   "Hodo"   → plot only hodoscope hit maps       (--AUXMode Hodo)
-    #   "WCHodo" → plot both (legacy default)         (--AUXMode WCHodo)
-    # Selecting "WC" lets the user run AUX plots on a setup where the
-    # hodoscope is physically removed (no MID 17): TBaux::init() will
-    # see this and skip resolving HX/HY CIDs entirely, so TBread never
-    # tries to open the absent MID-17 data files.
+    # AUX scope mode (only meaningful when "AUX" is in flags): a
+    # comma-separated subset of "Hodo,DWC,PID" (e.g. "DWC,PID"), built
+    # from the freeform UI's subsystem checkboxes and forwarded verbatim
+    # as --AUXMode. ("WC" is a valid token too — TBaux still supports it —
+    # but the UI's checkbox for it is commented out, no wire chamber at
+    # CERN this year.) Selecting a subset lets the user run AUX plots on a
+    # setup where some subsystems are physically absent (e.g. DWC not
+    # installed for a given run): TBaux::init() will skip resolving/loading
+    # the MIDs for subsystems that aren't requested.
     aux_mode: Optional[str] = None
+    # --particle PION|KAON|PROTON, forwarded to TBaux::SetParticle(). Only
+    # affects the "PID"/"DWCPID" --AUXCutMode; harmless (and forwarded)
+    # otherwise.
+    particle: Optional[str] = None
+    # --SkipEvent N, used by `--type single --method Waveform` to start the
+    # event-by-event waveform dump partway through the run.
+    skip_event: Optional[int] = None
 
 # ── Freeform LIVE process tracker ─────────────────────────────────────────────
 import subprocess as _subprocess
@@ -586,16 +614,22 @@ async def api_run_monit(req: MonitRequest):
         cmd.extend(["--module"] + req.modules)
     if req.max_event and req.max_event > 0:
         cmd.extend(["--MaxEvent", str(req.max_event)])
+    if req.skip_event is not None and req.skip_event > 0:
+        cmd.extend(["--SkipEvent", str(req.skip_event)])
     for flag in req.flags:
-        if flag in ("LIVE", "AUXcut", "AUX"):
+        if flag in ("LIVE", "AUXcut", "AUX", "Astro"):
             cmd.append(f"--{flag}")
-    # Forward the AUXcut mode when an actual cut is requested. The C++ side
-    # currently parses this flag as a no-op (until the position-correlation
-    # cut is wired into TBaux::IsPassing), so all modes still produce the
-    # same cut for now; the plumbing exists so the next step can simply
-    # consume the mode without further server-side changes.
+    # Forward the AUXcut mode when an actual cut is requested (none / WC /
+    # WCHodo / DWC / DWCPID) — see TBaux::IsPassing for what each mode does.
     if req.aux_cut_mode and req.aux_cut_mode != "none":
         cmd.extend(["--AUXCutMode", req.aux_cut_mode])
+
+    # --particle selects the PID cut thresholds consumed by the DWCPID
+    # cut mode (TBaux::SetParticle). Forwarded whenever set/non-"none",
+    # independent of AUXCutMode so the value is available if the operator
+    # flips AUXCutMode without re-entering the particle choice.
+    if req.particle and req.particle != "none":
+        cmd.extend(["--particle", req.particle])
 
     # Forward the AUX scope mode only when --AUX is on. Without --AUX
     # there are no AUX plots, so --AUXMode would be meaningless. We do
@@ -603,7 +637,10 @@ async def api_run_monit(req: MonitRequest):
     # is still a valid configuration (cut on WC, no AUX plot output),
     # and in that case TBaux falls back to its default "WCHodo" scope
     # which is harmless since fPlotting is false.
-    if "AUX" in req.flags and req.aux_mode in ("WC", "Hodo", "WCHodo"):
+    # aux_mode is now a comma-separated token list (e.g. "WC,DWC,PID")
+    # built from the freeform UI's subsystem checkboxes and forwarded
+    # verbatim; TBaux::init() tokenizes it itself.
+    if "AUX" in req.flags and req.aux_mode:
         cmd.extend(["--AUXMode", req.aux_mode])
 
     generated_cmd = " ".join(cmd)
@@ -760,10 +797,22 @@ async def api_run_monit(req: MonitRequest):
     # When --AUX is set, TBaux dumps several auxiliary canvases as JSON
     # under the prefix Run<N>_AUX_<method>[_AuxCut]_<canvas>.json:
     #   method=WC         → wire-chamber position (fCanvas_WC)
-    #   method=Hodoscope  → 16x16 IntADC hit map (fCanvas_HodoIntADC)
-    #   method=Hodoscope  → 16x16 PeakADC hit map (fCanvas_HodoPeakADC)
+    #   method=Hodoscope  → legacy KEK 16x16 IntADC hit map (fCanvas_HodoIntADC)
+    #   method=Hodoscope  → legacy KEK 16x16 PeakADC hit map (fCanvas_HodoPeakADC)
+    #   method=Hodoscope  → legacy KEK 16x16 center-corrected IntADC/PeakADC
+    #                       (fCanvas_HodoIntADC_corr / fCanvas_HodoPeakADC_corr)
+    #   method=Hodoscope  → TB2026 CERN square hodoscope, 29x29 1mm map,
+    #                       IntADC (fCanvas_SqHodoIntADC) and PeakADC
+    #                       (fCanvas_SqHodoPeakADC) as separate canvases
+    #   method=Hodoscope  → TB2026 CERN round hodoscope, 2-layer 0.5mm map,
+    #                       IntADC (fCanvas_RndHodoIntADC) and PeakADC
+    #                       (fCanvas_RndHodoPeakADC) as separate canvases
+    #   method=DWC        → DWC1/2 position + correlation (fCanvas_DWC)
+    #   method=PID        → PS/MC/TC/CC1/CC2 (fCanvas_PID)
     # We collect them all so they appear as separate entries in the run
-    # browser, grouped by method.
+    # browser, grouped by method. The legacy 16x16 canvases only appear if
+    # HX/HY channels resolve from the loaded mapping (not the case for the
+    # TB2026 CERN mapping, which uses SHX/SHY/RH1*/RH2* instead).
     if "AUX" in req.flags:
         auxcut_set = "AUXcut" in req.flags
         # group(1) = method (no underscores), group(2) = remainder after the
@@ -789,6 +838,24 @@ async def api_run_monit(req: MonitRequest):
                 "canvas": canvas,
                 "type": "AUX",
                 "method": method,
+            })
+
+    # `--type single --method Waveform` doesn't follow the usual per-canvas
+    # JSON naming scheme: TBsingleWaveform dumps one manifest file
+    # (Run<N>_SingleWaveform.json, listing the event-by-event PNGs it wrote
+    # under output/waveforms/) instead of a JSROOT canvas JSON. Surface it
+    # as a single synthetic canvas entry tagged kind="waveform" so the
+    # freeform viewer knows to render an image-sequence viewer instead of
+    # handing the file to JSROOT.
+    if req.type == "single" and req.method == "Waveform":
+        wf_json = DQM_OUTPUT_DIR / f"Run{req.run_number}_SingleWaveform.json"
+        if wf_json.exists():
+            canvases.append({
+                "filename": wf_json.name,
+                "canvas": "SingleWaveform",
+                "type": req.type,
+                "method": req.method,
+                "kind": "waveform",
             })
 
     return {

@@ -1,5 +1,16 @@
 BaseDirectory: "/Volumes/yhep/scratch/YUdaq"
-Mapping: "/Users/yhep/AI/CERN2026/DQM/mapping/toymapping.root"
+# TB2026 (CERN) placeholder mapping: 3x3 modules x 2x2 towers (6x6 grid),
+# M5-T3 is the MCP-PMT sum channel, MCP-PMT singles (C1..C64/S1..S64),
+# DWC1/2, PS/MC/TC/CC1/CC2, LC1..LC4, triggers. MIDs/channels are
+# PLACEHOLDERS pending real TB2026 cabling; see DQM/mapping/mapping_TB2026_v1.csv.
+Mapping: "/Users/yhep/tmp_test/CERN2026_update/KEK_DQM/DQM/mapping/mapping_TB2026_v1.root"
+# Previous KEK TB2026May (3x3 tower) mapping, kept for reference:
+# Mapping: "/Users/yhep/AI/CERN2026/DQM/mapping/toymapping.root"
+# Hodoscope test mapping used for the Run 15105 hodo/AstroPix validation
+# (deactivated for now — DWC is the position detector in use this run).
+# See config_general_hodo_astro_reference.yml for the full config that
+# went with it.
+# Mapping: "/Users/yhep/tmp_test/CERN2026_update/KEK_DQM/DQM/mapping/mapping_test_Hodo.root"
 
 # ===== 경로 설정  =====
 Paths:
@@ -12,7 +23,8 @@ Paths:
   NoticeBase: "/Users/yhep/scratch/notice"
   KillMeFile: "/Users/yhep/scratch/notice/test/TB_daq/KILLME"
 
-  DqmDir: "/Users/yhep/AI/CERN2026/DQM"
+  # DqmDir: "/Users/yhep/AI/CERN2026/DQM"
+  DqmDir: "/Users/yhep/tmp_test/CERN2026_update/KEK_DQM/DQM"
 
   HodoscopeSetFile: "/Volumes/yhep/scratch/notice/test/TB_daq/config/setup/set_JBNU_DAQ_21.txt"
   DaqLogDir: "/Volumes/yhep/scratch/notice/test/TB_daq/log"
@@ -60,51 +72,76 @@ AUX:
     THRESHOLD: 0.3         # Leading-edge fraction
     POSCUT: 5           # Optional |x|,|y| cut in mm
 
-  Hodoscope:
-    # Reference point in raw fiber coordinates (X_ref, Y_ref in fiber units,
-    # 0..16) where the beam-center actually falls. The center-corrected
-    # hodoscope plot shifts this point onto the nominal hodoscope center
-    # (8, 8). Default [8, 8] means "no correction" (corrected == raw).
-    # Update this after a calibration run, just like AUX.WC.CENTER.
-    CENTER: [8, 8]
-    # Which brightest-fiber metric to feed into the WC<->Hodo inclination cut
-    # (--AUXCutMode WCHodo). Both metrics are always *displayed* in the AUX
-    # plots; this only selects which one decides whether an event passes
-    # IsPassing(). Accepted: IntADC | PeakADC. Default: IntADC.
-    CUT_METHOD: IntADC
+  # Hodoscope (legacy KEK 16x16 + TB2026 CERN square/round) and the
+  # WC<->Hodo INCLINATION_CUT are deactivated for now — DWC is the
+  # position detector in use this run, so the hodoscope hardware isn't
+  # needed. TBaux's hodoscope Fill*/Draw logic is untouched; see
+  # config_general_hodo_astro_reference.yml for the full block (AUX.Hodoscope
+  # + INCLINATION_CUT) to restore if the hodoscope comes back into use,
+  # and dqm_freeform.html for the matching (commented-out) "Hodo" checkbox.
 
-    # Per-channel normalization constants (mean of each channel's distribution
-    # from a calibration run). Produced by normalize_hodo.cc.
-    # Usage: calibrated[ch] = raw[ch] / norm_const[ch]
-    # After normalization every channel's distribution is centered near 1.0,
-    # so the brightest-fiber search picks the geometrically-correct fiber
-    # rather than the highest-gain one.
-    # Set all to 1.0 to disable normalization (= raw, no-op).
-    # IntADC normalization constants (from IntADC distribution means)
-    NORM_CONST_INTADC:
-      HX: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
-      HY: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
-    # PeakADC normalization constants (from PeakADC distribution means)
-    NORM_CONST_PEAKADC:
-      HX: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
-      HY: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+  # ===== DWC (Delayed Wire Chamber) ========================================
+  # Restored from TB2025 (CERN). Two DWCs, each read out as 4 timing edges
+  # (Right/Left/Up/Down). Selected/loaded via --AUXMode token "DWC" and/or
+  # --AUXCutMode "DWC" | "DWCPID". Gracefully disabled if DWC1R/L/U/D and
+  # DWC2R/L/U/D are not present in the loaded mapping (e.g. DWC not
+  # installed for a given run) — see DQM/include/TBaux.h.
+  # PLACEHOLDER: constants below are the TB2025 CERN calibration (also
+  # hardcoded in DQM/function.h for the legacy standalone tools). They will
+  # almost certainly need to be recalibrated for the TB2026 DWC hardware/
+  # geometry once real data is available.
+  DWC:
+    THRESHOLD: 0.4   # Leading-edge fraction used for DWC timing
+    # [1X_slope, 1X_intercept, 1Y_slope, 1Y_intercept,
+    #  2X_slope, 2X_intercept, 2Y_slope, 2Y_intercept] (mm/ns, mm)
+    CALIB: [0.180654, 0.217961, -0.180342, -0.0994697, 0.181416, -0.00911072, -0.17822, -0.0489771]
+    CENTER: [-5.24, -8.416, -2.834, -9.524] # 1X, 1Y, 2X, 2Y beam-center offsets (mm)
+    CORR: 4     # Max |DWC1 - DWC2| per axis (mm) for the DWC correlation cut
+    POSCUT: -1  # Optional |DWC1 X|,|DWC1 Y| absolute cut (mm); <=0 disables
 
-  # ===== Beam-inclination cut =============================================
-  # Only active when --AUXcut is on AND --AUXCutMode WCHodo is selected.
-  # On top of the WC POSCUT, rejects events whose (center-corrected) WC and
-  # hodoscope beam-spot positions disagree by more than these limits, in mm:
-  #     |x_WC_corrected - x_Hodo_corrected| < INCLINATION_CUT[0]
-  #     |y_WC_corrected - y_Hodo_corrected| < INCLINATION_CUT[1]
-  # This removes inclined / off-axis beam events that would still pass the
-  # WC POSCUT alone (e.g. a particle that grazes the WC center but enters
-  # the hodoscope a few mm away - it would miss our detector's front face
-  # center). Hodoscope position is taken from the IntADC brightest fiber.
-  INCLINATION_CUT: [4, 4]
+  # ===== PID (Particle Identification) =====================================
+  # Restored from TB2025 (CERN): PS (preshower), MC (muon counter),
+  # CC1/CC2 (Cherenkov counters), TC (tail catcher). PS/MC/CC1/CC2/TC 1D
+  # PeakADC plots are drawn whenever --AUXMode includes "PID"; the PS/MC/
+  # CC1/CC2-based event selection is used by --AUXCutMode "DWCPID".
+  # Integration windows for these channels live in ModuleConfig below.
+  # PLACEHOLDER thresholds — retune once real TB2026 beam data is available.
+  PID:
+    PS_THRESHOLD_PEAKADC: 424  # "no --particle" cut: reject if PS PeakADC < this
+    MC_VETO_PEAKADC: 38        # reject if MC PeakADC < this (ported as-is from TB2025)
+
+  # Per-particle CC1/CC2/PS windows, selected via `--particle PION|KAON|PROTON`
+  # (see TBaux::SetParticle / IsPassing). CC1: -1 means "not used" (PROTON).
+  # PLACEHOLDER: only PION values are known from TB2025; KAON/PROTON are
+  # rough guesses and must be retuned from TB2026 beam data.
+  PION:
+    CC1: 86
+    CC2: 136
+    PS_INIT: 80
+    PS_FIN: 202
+  KAON:
+    CC1: 40
+    CC2: 90
+    PS_INIT: 80
+    PS_FIN: 202
+  PROTON:
+    CC1: -1
+    CC2: 40
+    PS_INIT: 80
+    PS_FIN: 202
+
+# ===== AstroPix position detector — DEACTIVATED for now ====================
+# DWC is the position detector in use this run, so the AstroPix hardware
+# isn't needed. TBastro/TBAstroReader are untouched on the C++ side; see
+# config_general_hodo_astro_reference.yml for the Astro: block to restore
+# (MID, TS_DIFF, TOT_DIFF_PCT, BaseDirectory) if AstroPix comes back into
+# use, and dqm_freeform.html for the matching (commented-out) "Astro"
+# checkbox / --type Astro option.
 
 # ===== Pedestal averaging window (per channel name) ========================
 # Number of waveform bins (counted from bin 1) used to compute the per-event
 # pedestal in Get{Int,Peak}ADC. Read by both TBplotengine (main detector)
-# and TBaux (WC + Hodoscope) via TBpedConfig::Load.
+# and TBaux (WC/DWC/PID) via TBpedConfig::Load.
 #
 # Lookup order (highest priority wins):
 #   1. ByName[name]                  - exact channel-name override
@@ -136,6 +173,32 @@ ModuleConfig:
   WCX: [400, 800]
   WCY: [400, 800]
   NIM: [400, 800]
+  # PID (TB2025 restoration, placeholder windows for TB2026 — retune once
+  # real beam data is available). PeakADC-based (TBaux always fills these
+  # with PeakADC, see TBmonit::LoopLive/LoopAfterRun).
+  PS: [200, 320]
+  MC: [650, 850]
+  TC: [300, 450]
+  CC1: [600, 850]
+  CC2: [600, 850]
+  # Leakage counters (LC1..LC4 placeholder count/wiring; drawn via
+  # --type single --module LC1 LC2 ... — wide IntADC binning is applied
+  # automatically for any channel name containing "LC").
+  LC1: [120, 310]
+  LC2: [120, 310]
+  LC3: [120, 310]
+  LC4: [120, 310]
+  # DWC (Delayed Wire Chamber) timing channels — windows here are only
+  # used if DWC is ever plotted via --type single; the DWC position/cut
+  # logic in TBaux reads full waveforms directly (see AUX.DWC above).
+  DWC1R: [1, 1000]
+  DWC1L: [1, 1000]
+  DWC1U: [1, 1000]
+  DWC1D: [1, 1000]
+  DWC2R: [1, 1000]
+  DWC2L: [1, 1000]
+  DWC2U: [1, 1000]
+  DWC2D: [1, 1000]
   # DRC channels: M{1-9}-T{1-4}-{S,C}  (9 modules × 4 towers × 2 sides = 72 channels)
   M1-T1-S: [120, 310]
   M1-T1-C: [120, 310]
@@ -209,38 +272,11 @@ ModuleConfig:
   M9-T3-C: [120, 310]
   M9-T4-S: [120, 310]
   M9-T4-C: [120, 310]
-  HX1: [600, 900]
-  HX2: [600, 900]
-  HX3: [600, 900]
-  HX4: [600, 900]
-  HX5: [600, 900]
-  HX6: [600, 900]
-  HX7: [600, 900]
-  HX8: [600, 900]
-  HX9: [600, 900]
-  HX10: [600, 900]
-  HX11: [600, 900]
-  HX12: [600, 900]
-  HX13: [600, 900]
-  HX14: [600, 900]
-  HX15: [600, 900]
-  HX16: [600, 900]
-  HY1: [600, 900]
-  HY2: [600, 900]
-  HY3: [600, 900]
-  HY4: [600, 900]
-  HY5: [600, 900]
-  HY6: [600, 900]
-  HY7: [600, 900]
-  HY8: [600, 900]
-  HY9: [600, 900]
-  HY10: [600, 900]
-  HY11: [600, 900]
-  HY12: [600, 900]
-  HY13: [600, 900]
-  HY14: [600, 900]
-  HY15: [600, 900]
-  HY16: [600, 900]
+  # Hodoscope channels (legacy KEK HX1-16/HY1-16 and TB2026 CERN
+  # RH1X/RH1Y/RH2X/RH2Y/SHX/SHY) are deactivated for now — DWC is the
+  # position detector in use this run. See
+  # config_general_hodo_astro_reference.yml for the full ModuleConfig
+  # entries to restore if the hodoscope comes back into use.
   C1:  [80, 500]
   C2:  [80, 500]
   C3:  [80, 500]

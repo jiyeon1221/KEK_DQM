@@ -1,0 +1,699 @@
+# ============================================================================
+# REFERENCE COPY — Hodoscope + AstroPix configuration snapshot.
+# NOT loaded by any code (--Config always points at config_general.yml).
+#
+# Taken on 2026-07-24, right before AUX.Hodoscope, the top-level Astro
+# block, and the RH1*/RH2*/SHX/SHY/HX/HY ModuleConfig entries were removed
+# from config_general.yml — DWC is the position detector in use this run,
+# so the hodoscope/AstroPix setup isn't needed for now.
+#
+# Keep this file around as the ready-to-restore config for whenever the
+# hodoscope or AstroPix hardware comes back into use: copy the relevant
+# block(s) back into config_general.yml (and restore the Mapping: line
+# below if the hodoscope test mapping is needed again). The underlying
+# C++ features (TBaux hodoscope Fill*/Draw logic, TBastro/TBAstroReader)
+# were never removed — only this config and the web GUI controls were
+# deactivated (see dqm_freeform.html for the matching commented-out
+# checkboxes).
+# ============================================================================
+
+BaseDirectory: "/Volumes/yhep/scratch/YUdaq"
+# TB2026 (CERN) placeholder mapping: 3x3 modules x 2x2 towers (6x6 grid),
+# M5-T3 is the MCP-PMT sum channel, MCP-PMT singles (C1..C64/S1..S64),
+# DWC1/2, PS/MC/TC/CC1/CC2, LC1..LC4, triggers. MIDs/channels are
+# PLACEHOLDERS pending real TB2026 cabling; see DQM/mapping/mapping_TB2026_v1.csv.
+# Mapping: "/Users/yhep/tmp_test/CERN2026_update/KEK_DQM/DQM/mapping/mapping_TB2026_v1.root"
+Mapping: "/Users/yhep/tmp_test/CERN2026_update/KEK_DQM/DQM/mapping/mapping_test_Hodo.root"
+# Previous KEK TB2026May (3x3 tower) mapping, kept for reference:
+# Mapping: "/Users/yhep/AI/CERN2026/DQM/mapping/toymapping.root"
+
+# ===== 경로 설정  =====
+Paths:
+  RunNumberFile: "/Volumes/yhep/scratch/notice/test/TB_daq/runnum.txt"
+  JsonKeyFile: "/Users/yhep/AI/CERN2026/logging/auto-logging-486908-9688f3064ef9.json"
+  SpreadsheetId: "1ExfjnGbRvupQD0ZbTTl6NOWP7drRhgioPmzxUoFwuA8"
+
+  DaqWorkDir: "/Users/yhep/scratch/notice/test/TB_daq"
+  DaqScript: "/Users/yhep/scratch/notice/test/TB_daq/run_all_KEK.sh"
+  NoticeBase: "/Users/yhep/scratch/notice"
+  KillMeFile: "/Users/yhep/scratch/notice/test/TB_daq/KILLME"
+
+  # DqmDir: "/Users/yhep/AI/CERN2026/DQM"
+  DqmDir: "/Users/yhep/tmp_test/CERN2026_update/KEK_DQM/DQM"
+
+  HodoscopeSetFile: "/Volumes/yhep/scratch/notice/test/TB_daq/config/setup/set_JBNU_DAQ_21.txt"
+  DaqLogDir: "/Volumes/yhep/scratch/notice/test/TB_daq/log"
+
+# ===== Mac Studio SSH (LAN connection) =====
+StudioSSH:
+  Host: "192.168.0.11"
+  User: "yhep"
+  Password: "rhk353"
+
+# ===== HV SSH =====
+HV:
+  SSH:
+    Host: "165.132.25.82"
+    Port: 1234
+    Username: "yoolab"
+    Password: "37326"
+  Paths:
+    WrapperWorkDir: "/home/yoolab/Downloads/CAENHV/SY4527/CAENHVWrapper/HVWrapperDemo"
+    ConfigFullPath: "/home/yoolab/Downloads/CAENHV/SY4527/CAENHVWrapper/config/config.txt"
+
+# ===== Position Scan 결과 (기준 절대 좌표, mm) =====
+PositionScan:
+  OffsetX: 107.64      # 기준 X 좌표 (mm)
+  OffsetY: 976.3        # 기준 Y 좌표 (mm)
+  TowerWidth: 46.333    # X 방향 타워 간격 (mm)  — PositionCalculator_Sym 전용
+  TowerHeight: 50.0     # Y 방향 타워 간격 (mm)  — PositionCalculator_Sym 전용
+
+# ===== Position Calculator 물리 상수 =====
+PositionConstants:
+  TiltingAxis: 53.5         # mm, 드는 점부터 틸팅 축까지 거리 (레거시, 현재 미사용)
+  RotationAxisAngle: 11.72  # degree, Rotation axis 기준각
+  RotationAxisDist: 24    # mm, Rotation axis 거리
+  CenterToBottom: 79.5       # mm, 틸팅 기준점으로부터 모듈 중심까지 수직 거리 (수식의 y)
+  AxisToModule: 72.0         # mm, 틸팅 축으로부터 모듈 중심까지 수평 거리 (수식의 x)
+
+AUX:
+  WC:
+    CALIB: 0.05            # mm/ns
+    CENTER: [-46.1234, -94.5808]     # Reference timing offsets (ns) for X and Y
+    THRESHOLD: 0.3         # Leading-edge fraction
+    POSCUT: 5           # Optional |x|,|y| cut in mm
+
+  Hodoscope:
+    # Reference point in raw fiber coordinates (X_ref, Y_ref in fiber units,
+    # 0..16) where the beam-center actually falls. The center-corrected
+    # hodoscope plot shifts this point onto the nominal hodoscope center
+    # (8, 8). Default [8, 8] means "no correction" (corrected == raw).
+    # Update this after a calibration run, just like AUX.WC.CENTER.
+    CENTER: [8, 8]
+    # Which brightest-fiber metric to feed into the WC<->Hodo inclination cut
+    # (--AUXCutMode WCHodo). Both metrics are always *displayed* in the AUX
+    # plots; this only selects which one decides whether an event passes
+    # IsPassing(). Accepted: IntADC | PeakADC. Default: IntADC.
+    CUT_METHOD: IntADC
+
+    # Per-channel normalization constants (mean of each channel's distribution
+    # from a calibration run). Produced by normalize_hodo.cc.
+    # Usage: calibrated[ch] = raw[ch] / norm_const[ch]
+    # After normalization every channel's distribution is centered near 1.0,
+    # so the brightest-fiber search picks the geometrically-correct fiber
+    # rather than the highest-gain one.
+    # Set all to 1.0 to disable normalization (= raw, no-op).
+    # IntADC normalization constants (from IntADC distribution means)
+    NORM_CONST_INTADC:
+      HX: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+      HY: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    # PeakADC normalization constants (from PeakADC distribution means)
+    NORM_CONST_PEAKADC:
+      HX: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+      HY: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+
+    # ===== TB2026 CERN square hodoscope (29x29, 1 mm resolution) ===========
+    # SHX1..29 / SHY1..29, 1 mm square fibers in a cross "+" arrangement,
+    # same concept as the KEK hodoscope above but larger (29x29 mm active
+    # area instead of 16x16). Drawn (as a 2D IntADC/PeakADC hit map) whenever
+    # --AUXMode includes "Hodo"; see TBaux::FillSquareHodoscope /
+    # draw_hodoscope_CERN_square.cc for the fill logic.
+    SQUARE:
+      # Reference point in raw fiber-center coordinates (X_ref, Y_ref, mm,
+      # range 0..29) that gets mapped to (0, 0) on the drawn histogram
+      # (which is always [-14.5, +14.5] on both axes). Default (14.5, 14.5)
+      # = geometric center of the active area, i.e. NO shift. Change this
+      # once a calibration run determines the actual beam-center offset.
+      CENTER: [14.5, 14.5]
+      # Shared IntADC/PeakADC integration window (bins) for all 58 channels.
+      # Set from the Run 15105 test-mapping average-waveform check;
+      # PeakADC is the recommended metric to look at for now.
+      RANGE: [200, 600]
+      # Per-fiber gain-normalization constants (mean of each channel's raw
+      # distribution from a calibration run; produced by
+      # normalize_hodo_CERN.cc). Usage: calibrated[ch] = raw[ch] / norm[ch].
+      # All 1.0 = no normalization applied.
+      NORM_CONST_INTADC:
+        SHX: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+        SHY: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+      NORM_CONST_PEAKADC:
+        SHX: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+        SHY: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+      # Per-fiber "over pedestal" hit thresholds, compared against the RAW
+      # (pre-normalization) IntADC/PeakADC. A fiber only enters the
+      # brightest-fiber search if its value exceeds this threshold; if no
+      # X and/or no Y fiber clears its threshold, the event is skipped
+      # (not filled) — expected, since the hodoscope's per-fiber efficiency
+      # is well below 100%. All 0 = no rejection (default; tune per-fiber
+      # from calibration data once available, using each fiber's own
+      # pedestal-peak vs. Landau-signal distribution).
+      THRESHOLD_INTADC:
+        SHX: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        SHY: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+      THRESHOLD_PEAKADC:
+        SHX: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        SHY: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+    # ===== TB2026 CERN round hodoscope (2 layers x 16 fibers/axis) =========
+    # RH1X/RH1Y (layer 1) + RH2X/RH2Y (layer 2), 1..16 each; 1 mm round
+    # fibers, layer 2 staggered by half a fiber so the two layers cover
+    # 0-16 mm / 0.5-16.5 mm with no gap -> 16.5x16.5 mm active area, 0.5 mm
+    # position resolution. Drawn whenever --AUXMode includes "Hodo"; see
+    # TBaux::FillRoundHodoscope / draw_hodoscope_CERN_round.cc.
+    ROUND:
+      # Reference point in raw coordinates (X_ref, Y_ref, mm, range
+      # 0..16.5) mapped to (0, 0) on the drawn histogram (always
+      # [-8.25, +8.25] on both axes). Default (8.25, 8.25) = geometric
+      # center of the active area, i.e. NO shift.
+      CENTER: [8.25, 8.25]
+      # Shared IntADC/PeakADC integration window (bins) for all 64 channels.
+      # Set from the Run 15105 test-mapping average-waveform check;
+      # PeakADC is the recommended metric to look at for now.
+      RANGE: [200, 600]
+      # Per-fiber gain-normalization constants, one 16-entry array per
+      # layer/axis combination (produced by normalize_hodo_CERN.cc).
+      # Usage: calibrated[ch] = raw[ch] / norm[ch]. All 1.0 = no-op.
+      NORM_CONST_INTADC:
+        RH1X: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+        RH1Y: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+        RH2X: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+        RH2Y: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+      NORM_CONST_PEAKADC:
+        RH1X: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+        RH1Y: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+        RH2X: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+        RH2Y: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+      # Per-fiber "over pedestal" hit thresholds (see SQUARE.THRESHOLD_*
+      # above for the full explanation). Max search spans BOTH layers per
+      # axis, so a layer-1 and layer-2 fiber each have their own threshold.
+      # All 0 = no rejection (default).
+      THRESHOLD_INTADC:
+        RH1X: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        RH1Y: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        RH2X: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        RH2Y: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+      THRESHOLD_PEAKADC:
+        RH1X: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        RH1Y: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        RH2X: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        RH2Y: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+  # ===== Beam-inclination cut =============================================
+  # Only active when --AUXcut is on AND --AUXCutMode WCHodo is selected.
+  # On top of the WC POSCUT, rejects events whose (center-corrected) WC and
+  # hodoscope beam-spot positions disagree by more than these limits, in mm:
+  #     |x_WC_corrected - x_Hodo_corrected| < INCLINATION_CUT[0]
+  #     |y_WC_corrected - y_Hodo_corrected| < INCLINATION_CUT[1]
+  # This removes inclined / off-axis beam events that would still pass the
+  # WC POSCUT alone (e.g. a particle that grazes the WC center but enters
+  # the hodoscope a few mm away - it would miss our detector's front face
+  # center). Hodoscope position is taken from the IntADC brightest fiber.
+  INCLINATION_CUT: [4, 4]
+
+  # ===== DWC (Delayed Wire Chamber) ========================================
+  # Restored from TB2025 (CERN). Two DWCs, each read out as 4 timing edges
+  # (Right/Left/Up/Down). Selected/loaded via --AUXMode token "DWC" and/or
+  # --AUXCutMode "DWC" | "DWCPID". Gracefully disabled if DWC1R/L/U/D and
+  # DWC2R/L/U/D are not present in the loaded mapping (e.g. DWC not
+  # installed for a given run) — see DQM/include/TBaux.h.
+  # PLACEHOLDER: constants below are the TB2025 CERN calibration (also
+  # hardcoded in DQM/function.h for the legacy standalone tools). They will
+  # almost certainly need to be recalibrated for the TB2026 DWC hardware/
+  # geometry once real data is available.
+  DWC:
+    THRESHOLD: 0.4   # Leading-edge fraction used for DWC timing
+    # [1X_slope, 1X_intercept, 1Y_slope, 1Y_intercept,
+    #  2X_slope, 2X_intercept, 2Y_slope, 2Y_intercept] (mm/ns, mm)
+    CALIB: [0.180654, 0.217961, -0.180342, -0.0994697, 0.181416, -0.00911072, -0.17822, -0.0489771]
+    CENTER: [-5.24, -8.416, -2.834, -9.524] # 1X, 1Y, 2X, 2Y beam-center offsets (mm)
+    CORR: 4     # Max |DWC1 - DWC2| per axis (mm) for the DWC correlation cut
+    POSCUT: -1  # Optional |DWC1 X|,|DWC1 Y| absolute cut (mm); <=0 disables
+
+  # ===== PID (Particle Identification) =====================================
+  # Restored from TB2025 (CERN): PS (preshower), MC (muon counter),
+  # CC1/CC2 (Cherenkov counters), TC (tail catcher). PS/MC/CC1/CC2/TC 1D
+  # PeakADC plots are drawn whenever --AUXMode includes "PID"; the PS/MC/
+  # CC1/CC2-based event selection is used by --AUXCutMode "DWCPID".
+  # Integration windows for these channels live in ModuleConfig below.
+  # PLACEHOLDER thresholds — retune once real TB2026 beam data is available.
+  PID:
+    PS_THRESHOLD_PEAKADC: 424  # "no --particle" cut: reject if PS PeakADC < this
+    MC_VETO_PEAKADC: 38        # reject if MC PeakADC < this (ported as-is from TB2025)
+
+  # Per-particle CC1/CC2/PS windows, selected via `--particle PION|KAON|PROTON`
+  # (see TBaux::SetParticle / IsPassing). CC1: -1 means "not used" (PROTON).
+  # PLACEHOLDER: only PION values are known from TB2025; KAON/PROTON are
+  # rough guesses and must be retuned from TB2026 beam data.
+  PION:
+    CC1: 86
+    CC2: 136
+    PS_INIT: 80
+    PS_FIN: 202
+  KAON:
+    CC1: 40
+    CC2: 90
+    PS_INIT: 80
+    PS_FIN: 202
+  PROTON:
+    CC1: -1
+    CC2: 40
+    PS_INIT: 80
+    PS_FIN: 202
+
+# ===== AstroPix position detector (35x35 pixel 2D hitmap) ==================
+# Standalone from AUX/mapping: AstroPix's ASIC-defined .dat format is read
+# by its own reader (TBAstroReader/TBastro), not TBread/TBaux, so no
+# channel-mapping entry is needed. Enabled via --Astro (alongside the main
+# DQM plots, run in a parallel thread) or --type Astro (hitmap only). See
+# DQM/draw_astropix_CERN.cc for the reference standalone implementation of
+# the same decode + col/row pairing logic.
+Astro:
+  MID: 1              # AstroPix module id (toy data: MID 1)
+  TS_DIFF: 2           # col/row pairing: |ts_col - ts_row| < TS_DIFF
+  TOT_DIFF_PCT: 10     # col/row pairing: |tot_col - tot_row| / tot_col * 100 < TOT_DIFF_PCT
+  # TODO: point this at the real TB2026 CERN AstroPix data path once
+  # available (same Run_<N>/Run_<N>_Astro/... layout, just a different
+  # root). Currently the toy data set used to validate the reader/drawer.
+  BaseDirectory: "/Users/yhep/tmp_test/CERN2026_update/KEK_DQM/toy_astroPix"
+
+# ===== Pedestal averaging window (per channel name) ========================
+# Number of waveform bins (counted from bin 1) used to compute the per-event
+# pedestal in Get{Int,Peak}ADC. Read by both TBplotengine (main detector)
+# and TBaux (WC + Hodoscope) via TBpedConfig::Load.
+#
+# Lookup order (highest priority wins):
+#   1. ByName[name]                  - exact channel-name override
+#   2. ByPrefix[prefix]              - matches if name starts with `prefix`
+#                                      AND the next character is a digit
+#                                      (so "S" hits S1..S64 but not "SiPM")
+#   3. Default                       - fallback for everything else
+#
+# To turn this off entirely, remove the section or set every entry's
+# value to 100; the C++ side then preserves the legacy 100-bin window
+# (which is also the compile-time default if PedestalBins is missing).
+PedestalBins:
+  Default: 100
+  ByPrefix:
+    S: 50    # MCP scintillator single channels (S1..S64)
+    C: 50    # MCP cerenkov single channels    (C1..C64)
+  # ByName:
+  #   M1-T1-C: 80  # uncomment to override a specific module channel (format: M{1-9}-T{1-4}-{C,S})
+  #   WCX:   80    # or a wire-chamber channel
+
+ModuleConfig:
+  Trg1: [80, 230]
+  Trg2: [80, 230]
+  VETO: [100, 200]
+  trg1NIM: [100, 200]
+  trg2NIM: [100, 200]
+  VETONIM: [100, 200]
+  COIN: [200, 900]
+  WCX: [400, 800]
+  WCY: [400, 800]
+  NIM: [400, 800]
+  # PID (TB2025 restoration, placeholder windows for TB2026 — retune once
+  # real beam data is available). PeakADC-based (TBaux always fills these
+  # with PeakADC, see TBmonit::LoopLive/LoopAfterRun).
+  PS: [200, 320]
+  MC: [650, 850]
+  TC: [300, 450]
+  CC1: [600, 850]
+  CC2: [600, 850]
+  # Leakage counters (LC1..LC4 placeholder count/wiring; drawn via
+  # --type single --module LC1 LC2 ... — wide IntADC binning is applied
+  # automatically for any channel name containing "LC").
+  LC1: [120, 310]
+  LC2: [120, 310]
+  LC3: [120, 310]
+  LC4: [120, 310]
+  # DWC (Delayed Wire Chamber) timing channels — windows here are only
+  # used if DWC is ever plotted via --type single; the DWC position/cut
+  # logic in TBaux reads full waveforms directly (see AUX.DWC above).
+  DWC1R: [1, 1000]
+  DWC1L: [1, 1000]
+  DWC1U: [1, 1000]
+  DWC1D: [1, 1000]
+  DWC2R: [1, 1000]
+  DWC2L: [1, 1000]
+  DWC2U: [1, 1000]
+  DWC2D: [1, 1000]
+  # DRC channels: M{1-9}-T{1-4}-{S,C}  (9 modules × 4 towers × 2 sides = 72 channels)
+  M1-T1-S: [120, 310]
+  M1-T1-C: [120, 310]
+  M1-T2-S: [120, 310]
+  M1-T2-C: [120, 310]
+  M1-T3-S: [120, 310]
+  M1-T3-C: [120, 310]
+  M1-T4-S: [120, 310]
+  M1-T4-C: [120, 310]
+  M2-T1-S: [120, 310]
+  M2-T1-C: [120, 310]
+  M2-T2-S: [120, 310]
+  M2-T2-C: [120, 310]
+  M2-T3-S: [120, 310]
+  M2-T3-C: [120, 310]
+  M2-T4-S: [120, 310]
+  M2-T4-C: [120, 310]
+  M3-T1-S: [120, 310]
+  M3-T1-C: [120, 310]
+  M3-T2-S: [120, 310]
+  M3-T2-C: [120, 310]
+  M3-T3-S: [120, 310]
+  M3-T3-C: [120, 310]
+  M3-T4-S: [120, 310]
+  M3-T4-C: [120, 310]
+  M4-T1-S: [120, 310]
+  M4-T1-C: [120, 310]
+  M4-T2-S: [120, 310]
+  M4-T2-C: [120, 310]
+  M4-T3-S: [120, 310]
+  M4-T3-C: [120, 310]
+  M4-T4-S: [120, 310]
+  M4-T4-C: [120, 310]
+  M5-T1-S: [120, 310]
+  M5-T1-C: [120, 310]
+  M5-T2-S: [120, 310]
+  M5-T2-C: [120, 310]
+  M5-T3-S: [120, 310]
+  M5-T3-C: [120, 310]
+  M5-T4-S: [120, 310]
+  M5-T4-C: [120, 310]
+  M6-T1-S: [120, 310]
+  M6-T1-C: [120, 310]
+  M6-T2-S: [120, 310]
+  M6-T2-C: [120, 310]
+  M6-T3-S: [120, 310]
+  M6-T3-C: [120, 310]
+  M6-T4-S: [120, 310]
+  M6-T4-C: [120, 310]
+  M7-T1-S: [120, 310]
+  M7-T1-C: [120, 310]
+  M7-T2-S: [120, 310]
+  M7-T2-C: [120, 310]
+  M7-T3-S: [120, 310]
+  M7-T3-C: [120, 310]
+  M7-T4-S: [120, 310]
+  M7-T4-C: [120, 310]
+  M8-T1-S: [120, 310]
+  M8-T1-C: [120, 310]
+  M8-T2-S: [120, 310]
+  M8-T2-C: [120, 310]
+  M8-T3-S: [120, 310]
+  M8-T3-C: [120, 310]
+  M8-T4-S: [120, 310]
+  M8-T4-C: [120, 310]
+  M9-T1-S: [120, 310]
+  M9-T1-C: [120, 310]
+  M9-T2-S: [120, 310]
+  M9-T2-C: [120, 310]
+  M9-T3-S: [120, 310]
+  M9-T3-C: [120, 310]
+  M9-T4-S: [120, 310]
+  M9-T4-C: [120, 310]
+  HX1: [600, 900]
+  HX2: [600, 900]
+  HX3: [600, 900]
+  HX4: [600, 900]
+  HX5: [600, 900]
+  HX6: [600, 900]
+  HX7: [600, 900]
+  HX8: [600, 900]
+  HX9: [600, 900]
+  HX10: [600, 900]
+  HX11: [600, 900]
+  HX12: [600, 900]
+  HX13: [600, 900]
+  HX14: [600, 900]
+  HX15: [600, 900]
+  HX16: [600, 900]
+  HY1: [600, 900]
+  HY2: [600, 900]
+  HY3: [600, 900]
+  HY4: [600, 900]
+  HY5: [600, 900]
+  HY6: [600, 900]
+  HY7: [600, 900]
+  HY8: [600, 900]
+  HY9: [600, 900]
+  HY10: [600, 900]
+  HY11: [600, 900]
+  HY12: [600, 900]
+  HY13: [600, 900]
+  HY14: [600, 900]
+  HY15: [600, 900]
+  HY16: [600, 900]
+  # TB2026 CERN hodoscope channels (test mapping, mapping_test_Hodo.root).
+  # Shared 200-600 bin search window for --type single (both IntADC and
+  # PeakADC read the same window; PeakADC is the recommended --method for
+  # now). Round: RH1X/RH1Y (layer 1), RH2X/RH2Y (layer 2), 1..16 each.
+  # Square: SHX/SHY, 1..29 each. Keep in sync with AUX.Hodoscope.ROUND/SQUARE.RANGE.
+  RH1X1: [200, 600]
+  RH1X2: [200, 600]
+  RH1X3: [200, 600]
+  RH1X4: [200, 600]
+  RH1X5: [200, 600]
+  RH1X6: [200, 600]
+  RH1X7: [200, 600]
+  RH1X8: [200, 600]
+  RH1X9: [200, 600]
+  RH1X10: [200, 600]
+  RH1X11: [200, 600]
+  RH1X12: [200, 600]
+  RH1X13: [200, 600]
+  RH1X14: [200, 600]
+  RH1X15: [200, 600]
+  RH1X16: [200, 600]
+  RH1Y1: [200, 600]
+  RH1Y2: [200, 600]
+  RH1Y3: [200, 600]
+  RH1Y4: [200, 600]
+  RH1Y5: [200, 600]
+  RH1Y6: [200, 600]
+  RH1Y7: [200, 600]
+  RH1Y8: [200, 600]
+  RH1Y9: [200, 600]
+  RH1Y10: [200, 600]
+  RH1Y11: [200, 600]
+  RH1Y12: [200, 600]
+  RH1Y13: [200, 600]
+  RH1Y14: [200, 600]
+  RH1Y15: [200, 600]
+  RH1Y16: [200, 600]
+  RH2X1: [200, 600]
+  RH2X2: [200, 600]
+  RH2X3: [200, 600]
+  RH2X4: [200, 600]
+  RH2X5: [200, 600]
+  RH2X6: [200, 600]
+  RH2X7: [200, 600]
+  RH2X8: [200, 600]
+  RH2X9: [200, 600]
+  RH2X10: [200, 600]
+  RH2X11: [200, 600]
+  RH2X12: [200, 600]
+  RH2X13: [200, 600]
+  RH2X14: [200, 600]
+  RH2X15: [200, 600]
+  RH2X16: [200, 600]
+  RH2Y1: [200, 600]
+  RH2Y2: [200, 600]
+  RH2Y3: [200, 600]
+  RH2Y4: [200, 600]
+  RH2Y5: [200, 600]
+  RH2Y6: [200, 600]
+  RH2Y7: [200, 600]
+  RH2Y8: [200, 600]
+  RH2Y9: [200, 600]
+  RH2Y10: [200, 600]
+  RH2Y11: [200, 600]
+  RH2Y12: [200, 600]
+  RH2Y13: [200, 600]
+  RH2Y14: [200, 600]
+  RH2Y15: [200, 600]
+  RH2Y16: [200, 600]
+  SHX1: [200, 600]
+  SHX2: [200, 600]
+  SHX3: [200, 600]
+  SHX4: [200, 600]
+  SHX5: [200, 600]
+  SHX6: [200, 600]
+  SHX7: [200, 600]
+  SHX8: [200, 600]
+  SHX9: [200, 600]
+  SHX10: [200, 600]
+  SHX11: [200, 600]
+  SHX12: [200, 600]
+  SHX13: [200, 600]
+  SHX14: [200, 600]
+  SHX15: [200, 600]
+  SHX16: [200, 600]
+  SHX17: [200, 600]
+  SHX18: [200, 600]
+  SHX19: [200, 600]
+  SHX20: [200, 600]
+  SHX21: [200, 600]
+  SHX22: [200, 600]
+  SHX23: [200, 600]
+  SHX24: [200, 600]
+  SHX25: [200, 600]
+  SHX26: [200, 600]
+  SHX27: [200, 600]
+  SHX28: [200, 600]
+  SHX29: [200, 600]
+  SHY1: [200, 600]
+  SHY2: [200, 600]
+  SHY3: [200, 600]
+  SHY4: [200, 600]
+  SHY5: [200, 600]
+  SHY6: [200, 600]
+  SHY7: [200, 600]
+  SHY8: [200, 600]
+  SHY9: [200, 600]
+  SHY10: [200, 600]
+  SHY11: [200, 600]
+  SHY12: [200, 600]
+  SHY13: [200, 600]
+  SHY14: [200, 600]
+  SHY15: [200, 600]
+  SHY16: [200, 600]
+  SHY17: [200, 600]
+  SHY18: [200, 600]
+  SHY19: [200, 600]
+  SHY20: [200, 600]
+  SHY21: [200, 600]
+  SHY22: [200, 600]
+  SHY23: [200, 600]
+  SHY24: [200, 600]
+  SHY25: [200, 600]
+  SHY26: [200, 600]
+  SHY27: [200, 600]
+  SHY28: [200, 600]
+  SHY29: [200, 600]
+  C1:  [80, 500]
+  C2:  [80, 500]
+  C3:  [80, 500]
+  C4:  [80, 500]
+  C5:  [80, 500]
+  C6:  [80, 500]
+  C7:  [80, 500]
+  C8:  [80, 500]
+  C9:  [80, 500]
+  C10: [80, 500]
+  C11: [80, 500]
+  C12: [80, 500]
+  C13: [80, 500]
+  C14: [80, 500]
+  C15: [80, 500]
+  C16: [80, 500]
+  C17: [80, 500]
+  C18: [80, 500]
+  C19: [80, 500]
+  C20: [80, 500]
+  C21: [80, 500]
+  C22: [80, 500]
+  C23: [80, 500]
+  C24: [80, 500]
+  C25: [80, 500]
+  C26: [80, 500]
+  C27: [80, 500]
+  C28: [80, 500]
+  C29: [80, 500]
+  C30: [80, 500]
+  C31: [80, 500]
+  C32: [80, 500]
+  C33: [80, 500]
+  C34: [80, 500]
+  C35: [80, 500]
+  C36: [80, 500]
+  C37: [80, 500]
+  C38: [80, 500]
+  C39: [80, 500]
+  C40: [80, 500]
+  C41: [80, 500]
+  C42: [80, 500]
+  C43: [80, 500]
+  C44: [80, 500]
+  C45: [80, 500]
+  C46: [80, 500]
+  C47: [80, 500]
+  C48: [80, 500]
+  C49: [80, 500]
+  C50: [80, 500]
+  C51: [80, 500]
+  C52: [80, 500]
+  C53: [80, 500]
+  C54: [80, 500]
+  C55: [80, 500]
+  C56: [80, 500]
+  C57: [80, 500]
+  C58: [80, 500]
+  C59: [80, 500]
+  C60: [80, 500]
+  C61: [80, 500]
+  C62: [80, 500]
+  C63: [80, 500]
+  C64: [80, 500]
+  S1:  [80, 500]
+  S2:  [80, 500]
+  S3:  [80, 500]
+  S4:  [80, 500]
+  S5:  [80, 500]
+  S6:  [80, 500]
+  S7:  [80, 500]
+  S8:  [80, 500]
+  S9:  [80, 500]
+  S10: [80, 500]
+  S11: [80, 500]
+  S12: [80, 500]
+  S13: [80, 500]
+  S14: [80, 500]
+  S15: [80, 500]
+  S16: [80, 500]
+  S17: [80, 500]
+  S18: [80, 500]
+  S19: [80, 500]
+  S20: [80, 500]
+  S21: [80, 500]
+  S22: [80, 500]
+  S23: [80, 500]
+  S24: [80, 500]
+  S25: [80, 500]
+  S26: [80, 500]
+  S27: [80, 500]
+  S28: [80, 500]
+  S29: [80, 500]
+  S30: [80, 500]
+  S31: [80, 500]
+  S32: [80, 500]
+  S33: [80, 500]
+  S34: [80, 500]
+  S35: [80, 500]
+  S36: [80, 500]
+  S37: [80, 500]
+  S38: [80, 500]
+  S39: [80, 500]
+  S40: [80, 500]
+  S41: [80, 500]
+  S42: [80, 500]
+  S43: [80, 500]
+  S44: [80, 500]
+  S45: [80, 500]
+  S46: [80, 500]
+  S47: [80, 500]
+  S48: [80, 500]
+  S49: [80, 500]
+  S50: [80, 500]
+  S51: [80, 500]
+  S52: [80, 500]
+  S53: [80, 500]
+  S54: [80, 500]
+  S55: [80, 500]
+  S56: [80, 500]
+  S57: [80, 500]
+  S58: [80, 500]
+  S59: [80, 500]
+  S60: [80, 500]
+  S61: [80, 500]
+  S62: [80, 500]
+  S63: [80, 500]
+  S64: [80, 500]

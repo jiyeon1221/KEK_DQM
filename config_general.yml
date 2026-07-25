@@ -51,9 +51,9 @@ HV:
 
 # ===== Position Scan 결과 (기준 절대 좌표, mm) =====
 PositionScan:
-  OffsetX: 107.64      # 기준 X 좌표 (mm)
-  OffsetY: 976.3        # 기준 Y 좌표 (mm)
-  TowerWidth: 46.333    # X 방향 타워 간격 (mm)  — PositionCalculator_Sym 전용
+  OffsetX: 1000    # 기준 X 좌표 (mm)
+  OffsetY: 1000        # 기준 Y 좌표 (mm)
+  TowerWidth: 48    # X 방향 타워 간격 (mm)  — PositionCalculator_Sym 전용
   TowerHeight: 50.0     # Y 방향 타워 간격 (mm)  — PositionCalculator_Sym 전용
 
 # ===== Position Calculator 물리 상수 =====

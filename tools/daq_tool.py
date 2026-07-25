@@ -14,6 +14,7 @@ from pathlib import Path
 from .base_tool import BaseTool
 from .run_log_tool import RunLogTool
 from .config_loader import get_path_config, get_data_directory, load_config
+from .position_calculator_tool import tower_to_dqm_canvas_number
 
 
 # ===== DAQ 설정 (Config from YAML) =====
@@ -96,14 +97,12 @@ class DAQRunTool(BaseTool):
             agent_type = shared_state.get("agent_type")
             output_queue = shared_state.get("_output_queue")
             if agent_type and output_queue is not None:
-                # Manifest cell templates use ${current_tower} as the bare digit
-                # (e.g. fCanvas_Tower5). shared_state stores the prefixed form
-                # ("T5"), so strip the leading "T".
+                # Manifest cell templates use ${current_tower} as the DQM live
+                # canvas number (e.g. fCanvas_Tower17 for tower "M5T1" — DQM
+                # assigns this number by sorting the mapping, not from the tower
+                # name itself; see tower_to_dqm_canvas_number for the algorithm).
                 tower_raw = shared_state.get("current_tower") or "5"
-                if isinstance(tower_raw, str) and tower_raw.upper().startswith("T"):
-                    tower_num = tower_raw[1:]
-                else:
-                    tower_num = str(tower_raw)
+                tower_num = tower_to_dqm_canvas_number(tower_raw)
                 dqm_session.start(
                     run_number=int(runnum),
                     agent_type=agent_type,

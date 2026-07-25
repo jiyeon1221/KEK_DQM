@@ -65,7 +65,7 @@ Params: {
     "pos_h": <x_from_state>,
     "pos_v": <y_from_state>,
     "pos_rot": 1.5,
-    "pos_tilt": 1.0,
+    "pos_tilt": 0.0,
     "beam_energy": <energy>
 }
 (If energy_config[energy] has "config", also include "config": <that name> in Params. Omit otherwise.)
@@ -112,7 +112,7 @@ def _build_state_context(state):
     lines = []
     lines.append(f"Phase: {state['phase']}")
     lines.append(f"Tower: {state['tower']}")
-    lines.append(f"M5T3 Position: x={state['t5_x']:.3f}, y={state['t5_y']:.3f}, rot=1.5, tilt=1.0")
+    lines.append(f"M5T3 Position: x={state['t5_x']:.3f}, y={state['t5_y']:.3f}, rot=1.5, tilt=0.0")
     lines.append(f"Position confirmed: {state.get('y_confirmed', False)}")
     lines.append(f"needs_plot_confirm: {state.get('needs_plot_confirm', False)}")
     if state.get("position"):
@@ -225,7 +225,7 @@ def _emit_energy(examples, state, history, energy, events, t5_x, t5_y, run_numbe
     params = {
         "events": events,
         "pos_h": t5_x, "pos_v": t5_y,
-        "pos_rot": 1.5, "pos_tilt": 1.0, "beam_energy": energy,
+        "pos_rot": 1.5, "pos_tilt": 0.0, "beam_energy": energy,
     }
     if daq_config:
         params["config"] = daq_config
@@ -345,7 +345,7 @@ def generate_workflow_from_mid(energy_list, events_list, start_idx):
             {"tool": "daq_run_tool", "params": {
                 "events": prev_ev,
                 "pos_h": t5_x, "pos_v": t5_y,
-                "pos_rot": 1.5, "pos_tilt": 1.0, "beam_energy": prev_e,
+                "pos_rot": 1.5, "pos_tilt": 0.0, "beam_energy": prev_e,
             }}, ensure_ascii=False)})
         history.append({"role": "assistant", "content": json.dumps(
             {"message": MESSAGE_PLOT_CONFIRM}, ensure_ascii=False)})

@@ -7,8 +7,7 @@ ADC 측정(hv_equalization_suggest)만 시뮬레이션.
 
 from tools.hv_equalization_tool import hv_equalization_start
 from agents.hv_equalization_sim_agent import HVEqualizationSimAgent
-
-TOWER_ORDER = ["T1", "T2", "T3", "T6", "T5", "T4", "T7", "T8", "T9"]
+from agents.agent_runner import TOWER_ORDER
 
 
 def main():

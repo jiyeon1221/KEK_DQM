@@ -655,7 +655,7 @@ class HVControlTool(BaseTool):
                 if re.match(rf'^(?:M\d+[-_ ]?)?T\d+[-_ ]?{name_key}$', name)
             )
 
-        # Tower 선택: "T1"~"T9" → 모든 모듈의 해당 타워 C/S 채널
+        # Tower 선택: "T1"~"T4" → 모든 모듈의 해당 타워 C/S 채널
         tower_m = re.match(r'^T(\d+)$', name_key)
         if tower_m:
             tn = tower_m.group(1)

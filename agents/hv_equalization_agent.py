@@ -88,6 +88,12 @@ class HVEqualizationAgent(BaseAgent):
             "y_confirmed": False,
             "needs_suggest": False,
             "needs_plot_confirm": False,
+            # voltage 적용(1f) 직후 사용자에게 확인 메시지(1g, MSG_HV_CONFIRM)를
+            # 반드시 보여주기 위한 게이트. 이게 없으면 needs_plot_confirm/needs_suggest가
+            # 이미 False/reset된 상태라 step hint가 곧장 daq_run_tool(1c)로 넘어가버려서
+            # 모델이 1g 메시지를 그냥 건너뛰어도 아무도 막지 못한다(사용자에게 전압 변경
+            # 확인이 전혀 출력되지 않는 버그의 원인).
+            "needs_hv_confirm": False,
             # 승인 단계에서 사용자가 실제로 '완료'를 눌렀는지(코드가 판정).
             # phase=="approving"만으로 voltage 적용을 강제하면 수동 조정 입력이 무시된다.
             "approval_confirmed": False,
@@ -181,6 +187,8 @@ After user says "완료":
             return f"{base} | REQUIRED NEXT: hv_execute_tool voltage (step 1f — user already confirmed)"
         elif adc_known and suggest_pending:
             return f"{base} | REQUIRED NEXT: approval message (step 1e)"
+        elif self.state.get("needs_hv_confirm"):
+            return f"{base} | REQUIRED NEXT: HV confirmation message (step 1g — voltage just applied, tell the user before next DAQ)"
         elif self.state.get("needs_plot_confirm"):
             return f"{base} | REQUIRED NEXT: plot confirmation message (step 1c-plot — DAQ done, send plot confirm before suggest)"
         elif self.state.get("needs_suggest"):
@@ -204,7 +212,11 @@ After user says "완료":
                 lines.append(f"*** REQUIRED NEXT: hv_execute_tool status (step 1b) — position confirmed, check HV now ***")
             lines.append("")
 
-        if self.state.get("needs_plot_confirm"):
+        if self.state.get("needs_hv_confirm"):
+            lines.append(f"*** REQUIRED NEXT: HV confirmation message (step 1g) — voltage was just applied, tell the user BEFORE the next DAQ ***")
+            lines.append(f'*** output: {{"message": "{MSG_HV_CONFIRM}"}} ***')
+            lines.append("")
+        elif self.state.get("needs_plot_confirm"):
             lines.append(f"*** REQUIRED NEXT: plot confirmation message (step 1c-plot) — DAQ done, send plot confirm BEFORE suggest ***")
             lines.append(f'*** output: {{"message": "{MSG_PLOT_CONFIRM}"}} ***')
             lines.append("")
@@ -238,6 +250,7 @@ After user says "완료":
         lines.append(f"Target ADC: {self.state['target_adc_c']}")
         lines.append(f"Last HV: C={self.state.get('last_hv_c')}V, S={self.state.get('last_hv_s')}V")
         lines.append(f"needs_plot_confirm: {self.state.get('needs_plot_confirm', False)}")
+        lines.append(f"needs_hv_confirm: {self.state.get('needs_hv_confirm', False)}")
         if self.state.get("last_suggested_hv_c") is not None:
             dc = self.state.get("channel_done_c", False)
             ds = self.state.get("channel_done_s", False)
@@ -362,6 +375,9 @@ After user says "완료":
                         self.state["last_hv_c"] = v_c
                         self.state["last_hv_s"] = v_s
                         self.log(f"HV Verified: C={v_c}V, S={v_s}V")
+                    # 전압 적용 직후엔 반드시 1g(MSG_HV_CONFIRM) 메시지를 사용자에게
+                    # 보여준 다음에야 다음 DAQ로 넘어가게 강제한다 (_guard_tool/_guard_ai_message).
+                    self.state["needs_hv_confirm"] = True
                 return result
 
             elif tool_name == "hv_equalization_suggest":
@@ -483,18 +499,23 @@ After user says "완료":
 
     # Fields the LLM must not overwrite.
     # - Config values set at init: beam_energy, target_events, target_adc_*
-    # - Hardware-read values (set by _execute_tool): last_adc_*, last_suggested_hv_*,
-    #   channel_done_*, last_hv_*, last_run_number
+    # - Hardware-read values (set by _execute_tool): last_adc_*, channel_done_*,
+    #   last_hv_*, last_run_number
     # - Code-managed counters: iterations, done
+    # - last_suggested_hv_*: _do_suggest()가 설정하고, 사용자의 수동 조정 요청은
+    #   _on_user_input()이 _parse_manual_hv_adjustment로 결정론적으로 반영한다.
+    #   LLM이 자유 텍스트에서 숫자를 잘못 읽어 여기 덮어쓰면 방금 코드가 반영한
+    #   수동 조정값이 사라지므로(반영 안 되는 버그의 원인) 코드 소유로 보호한다.
     _PROTECTED_FIELDS = frozenset({
         "beam_energy", "target_events", "target_adc_c", "target_adc_s",
         "current_tower",
         "last_adc_c", "last_adc_s",
+        "last_suggested_hv_c", "last_suggested_hv_s",
         "channel_done_c", "channel_done_s",
         "last_hv_c", "last_hv_s",
         "last_run_number",
         "iterations", "done",
-        "needs_suggest",
+        "needs_suggest", "needs_hv_confirm",
         "y_confirmed",  # 위치 확인은 코드 소유 (_on_user_input)
         "approval_confirmed",  # 승인 확인은 코드 소유 (_on_user_input)
     })
@@ -531,12 +552,49 @@ After user says "완료":
             return False  # 숫자 포함 → 수동 조정 요청
         return any(w in t for w in self._CONFIRM_WORDS)
 
+    # 상대 조정 키워드. 절대값 지정("...으로", "...V")과 구분해 baseline(현재 제안값)에
+    # 더하거나 뺀다.
+    _REL_UP_WORDS = ("올려", "올림", "높여", "높임", "증가")
+    _REL_DOWN_WORDS = ("내려", "내림", "낮춰", "낮춤", "감소")
+
+    @staticmethod
+    def _parse_manual_hv_adjustment(
+        text: str, current_c: Optional[float], current_s: Optional[float]
+    ) -> Dict[str, float]:
+        """수동 HV 조정 자연어("c 850으로 s 900으로", "C를 800으로", "S 10 올려줘")를
+        코드가 결정론적으로 파싱한다. LLM이 update_state로 이 값을 파싱/반영하는 걸
+        신뢰하면 파인튜닝 모델이 자릿수를 틀리거나 아예 반영을 누락할 때 화면에
+        수동 조정 이전 값이 그대로 남는다(사용자가 값을 바꿔도 반영 안 되는 버그의
+        원인) — 그래서 이벤트 개수/승인 메시지와 동일하게 코드가 직접 파싱해 state를
+        갱신하고, LLM의 update_state는 _PROTECTED_FIELDS로 차단한다.
+        반환: 감지된 채널만 담은 {"C": <new_hv>, "S": <new_hv>}."""
+        result: Dict[str, float] = {}
+        # trailing은 lookahead(비소비)로 캡처한다 — 소비 그룹으로 두면 "c 850으로 s 900으로"처럼
+        # 트레일링이 다음 채널 글자까지 먹어치워 두 번째 채널을 놓친다.
+        for m in re.finditer(r'([cCsS])\D{0,8}?(\d+(?:\.\d+)?)(?=(\D{0,6}))', text or ""):
+            ch = m.group(1).upper()
+            val = float(m.group(2))
+            trailing = m.group(3) or ""
+            current = current_c if ch == "C" else current_s
+            if current is not None and any(w in trailing for w in HVEqualizationAgent._REL_UP_WORDS):
+                result[ch] = current + val
+            elif current is not None and any(w in trailing for w in HVEqualizationAgent._REL_DOWN_WORDS):
+                result[ch] = current - val
+            else:
+                result[ch] = val  # "...으로", "...V" 등 → 절대값 지정
+        return result
+
     def _on_user_input(self, user_input: str):
         # 이동 확인
         if (not self.state.get("y_confirmed")
                 and self.state.get("last_hv_c") is None):
             self.state["y_confirmed"] = True
             self.log("Position confirmed by user")
+            return
+        # 전압 적용(1f) 후 확인 메시지(1g)에 대한 응답 → 다음 DAQ로 진행
+        if self.state.get("needs_hv_confirm"):
+            self.state["needs_hv_confirm"] = False
+            self.log("HV 변경 확인됨 → 다음 DAQ로 진행 (step 1c)")
             return
         # DAQ 후 plot 확인 → suggest 단계로 전환
         if self.state.get("needs_plot_confirm"):
@@ -556,10 +614,27 @@ After user says "완료":
                 self.log("HV 승인 확인됨 → voltage 적용 (step 1f)")
             else:
                 self.state["approval_confirmed"] = False
-                self.log(f"승인 단계 수동 조정 요청 감지: '{user_input}' → 승인 메시지 재전송 (step 1e)")
+                manual = self._parse_manual_hv_adjustment(
+                    user_input,
+                    self.state.get("last_suggested_hv_c"),
+                    self.state.get("last_suggested_hv_s"),
+                )
+                if "C" in manual and not self.state.get("channel_done_c", False):
+                    self.state["last_suggested_hv_c"] = manual["C"]
+                if "S" in manual and not self.state.get("channel_done_s", False):
+                    self.state["last_suggested_hv_s"] = manual["S"]
+                self.log(f"승인 단계 수동 조정 요청 감지: '{user_input}' → 파싱 결과 {manual} → 승인 메시지 재전송 (step 1e)")
             return
 
     def _guard_tool(self, tool_name: str, decision: Dict[str, Any]) -> Optional[str]:
+        # 전압 적용(1f) 직후엔 확인 메시지(1g)를 먼저 보여줘야 한다 — 이게 없으면
+        # 모델이 확인 메시지 없이 바로 다음 daq_run_tool을 호출해도 아무도 못 막아서
+        # 사용자에게 "전압이 변경되었습니다" 안내가 전혀 출력되지 않는다.
+        if self.state.get("needs_hv_confirm"):
+            return (
+                f"needs_hv_confirm=True — send HV confirmation message first: "
+                f'{{"message": "{MSG_HV_CONFIRM}"}}'
+            )
         # plot confirm 필요 시 DAQ/suggest/hv 차단
         if self.state.get("needs_plot_confirm"):
             return (
@@ -573,9 +648,35 @@ After user says "완료":
             if not (done_c and done_s):
                 return (f"수렴 미완료 (C={done_c}, S={done_s}). "
                         f"승인 메시지(step 1e)를 먼저 출력하세요.")
+        # voltage 적용(1f)은 사용자가 승인 메시지(1e)에 실제로 '완료'한 뒤에만 허용.
+        # 이게 없으면 hv_equalization_suggest 직후 모델이 승인 메시지를 아예 건너뛰고
+        # 곧장 전압을 적용해버려도 아무도 못 막는다(사용자에게 "적용하시겠습니까?"가
+        # 전혀 안 뜨는 버그의 원인).
+        if tool_name == "hv_execute_tool":
+            cmd = (decision.get("params") or {}).get("command", "").lower()
+            if cmd == "voltage" and not self.state.get("approval_confirmed"):
+                return (
+                    "approval_confirmed=False — voltage를 적용하기 전에 승인 메시지(step 1e)를 "
+                    "먼저 출력하고 사용자가 '완료'로 확인할 때까지 기다리세요. "
+                    f"{self._get_step_hint()}"
+                )
         return None
 
     def _guard_ai_message(self, message: str) -> Optional[str]:
+        # 전압 적용 직후엔 확인 메시지(1g)만 유효하다 — 승인 메시지 canonicalization
+        # (아래 _finalize_ai_message)보다 먼저 걸려야 하므로 canonical=None인 이 구간에서
+        # 별도로 강제한다.
+        if self.state.get("needs_hv_confirm") and message != MSG_HV_CONFIRM:
+            return (f"needs_hv_confirm=True — the ONLY valid message now is the HV "
+                    f'confirmation: {{"message": "{MSG_HV_CONFIRM}"}}. Do not send any other '
+                    f"message (e.g. jumping straight to the next DAQ). {self._get_step_hint()}")
+        # DAQ 직후엔 plot 확인 메시지만 유효하다. 모델이 가끔 한 단계 되돌아가 다른
+        # 메시지(예: 위치 이동)를 다시 내보내는 걸 막지 않으면 "가끔 이상한 메시지가
+        # 뜬다"는 증상으로 그대로 사용자에게 노출된다.
+        if self.state.get("needs_plot_confirm") and message != MSG_PLOT_CONFIRM:
+            return (f"needs_plot_confirm=True — the ONLY valid message now is the plot "
+                    f'confirmation: {{"message": "{MSG_PLOT_CONFIRM}"}}. Do not send any other '
+                    f"message (e.g. a position move message). {self._get_step_hint()}")
         if MSG_PLOT_CONFIRM in message and not self.state.get("needs_plot_confirm"):
             return f"needs_plot_confirm=False — DO NOT send plot confirmation before DAQ runs. {self._get_step_hint()}"
         return None
@@ -613,9 +714,14 @@ After user says "완료":
 
     def _finalize_ai_message(self, message: str) -> str:
         # 승인 메시지는 LLM 텍스트를 신뢰하지 않고 state 기준으로 재구성한다.
-        if "적용하시겠습니까" in message:
-            canonical = self._build_approval_message()
-            if canonical and canonical != message:
+        # 이전엔 message에 "적용하시겠습니까" 문자열이 정확히 들어있을 때만 교정했는데,
+        # 반복된 승인 라운드에서 모델이 그 문구를 깨뜨리거나 다른 형식으로 출력하면
+        # 교정 없이 그대로 사용자에게 노출돼 "출력이 이상해서 확인이 안 되는" 문제가
+        # 생겼다. _build_approval_message()가 None이 아니라는 것 자체가 지금이
+        # 승인 단계(step 1e)라는 뜻이므로, 문자열 매칭 대신 그 여부로 판단한다.
+        canonical = self._build_approval_message()
+        if canonical is not None:
+            if canonical != message:
                 self.log(f"승인 메시지 보정(state 기준): {message!r} → {canonical!r}")
-                return canonical
+            return canonical
         return super()._finalize_ai_message(message)

@@ -5,6 +5,7 @@ PMT 간 신호 균일화를 위한 HV 조정 도구 (peakADC 계산 통합)
 """
 
 import os
+import re
 import json
 import glob
 import numpy as np
@@ -133,7 +134,7 @@ def collect_peakADC_for_run(run_num: int, cs_type: str, center: Optional[str] = 
     Args:
         run_num: Run 번호
         cs_type: 'C' 또는 'S'
-        center: 타워 위치 (예: "T5"). 필수 (agent에서 제공)
+        center: 타워 위치 (예: "M5T3"). 필수 (agent에서 제공)
     """
     if center is None:
         return []
@@ -266,81 +267,85 @@ def _read_peakADC_from_dqm_json(run_num: int, center: str, cs_type: str) -> Tupl
     DQM live가 생성한 JSON 파일에서 TH1D peakADC mean 추출 (valley cut 적용).
     DQM monit과 동일한 데이터 소스 사용.
     """
-    tower_num = center[1:]  # "T1" → "1"
     hist_name = f"{center}-{cs_type}"
-    json_path = DQM_OUTPUT_DIR / f"Run{run_num}_full_PeakADC_fCanvas_Tower{tower_num}.json"
 
-    if not json_path.exists():
-        return None, 0
+    # DQM은 per-tower 캔버스를 "이름 정렬 순번"(fCanvas_Tower{1..N})으로 저장한다
+    # (TBplotengine init_Generic). 이 순번은 타워명에서 계산할 수 없으므로
+    # (예: 36타워 "M5-T1" → Tower17), 파일명을 유추하지 말고 Tower*.json을 훑어
+    # {center}-{cs_type} 히스토를 담은 파일을 찾는다. 9타워("T1"→Tower1)·36타워
+    # ("M1-T1"→Tower1) 모두 네이밍/인덱싱 규칙과 무관하게 동작한다.
+    pattern = str(DQM_OUTPUT_DIR / f"Run{run_num}_full_PeakADC_fCanvas_Tower*.json")
+    for json_path in sorted(glob.glob(pattern)):
+        try:
+            with open(json_path) as f:
+                canvas = json.load(f)
+        except Exception:
+            continue
 
-    try:
-        with open(json_path) as f:
-            canvas = json.load(f)
-
-        pads = canvas.get('fPrimitives', {}).get('arr', [])
-        for pad in pads:
-            prims = pad.get('fPrimitives', {}).get('arr', [])
-            for prim in prims:
+        for pad in canvas.get('fPrimitives', {}).get('arr', []):
+            for prim in pad.get('fPrimitives', {}).get('arr', []):
                 if prim.get('_typename') != 'TH1D' or prim.get('fName') != hist_name:
                     continue
 
-                ax = prim.get('fXaxis', {})
-                nbins = ax.get('fNbins', 0)
-                xmin = ax.get('fXmin', 0.0)
-                xmax = ax.get('fXmax', float(nbins))
-                if nbins <= 0:
+                # hist 찾음 — 이후 실패는 명시적으로 (None, 0)
+                try:
+                    ax = prim.get('fXaxis', {})
+                    nbins = ax.get('fNbins', 0)
+                    xmin = ax.get('fXmin', 0.0)
+                    xmax = ax.get('fXmax', float(nbins))
+                    if nbins <= 0:
+                        return None, 0
+
+                    bin_width = (xmax - xmin) / nbins
+                    farray = prim.get('fArray', [])
+                    # fArray[0] = underflow, [1..nbins] = bins, [nbins+1] = overflow
+                    counts = np.array(farray[1:nbins + 1], dtype=float)
+                    centers = np.array([xmin + (i + 0.5) * bin_width for i in range(nbins)])
+
+                    if counts.sum() <= 0:
+                        return None, 0
+
+                    # Valley cut on histogram bins (mirrors smart_valley_cut logic)
+                    if SCIPY_AVAILABLE:
+                        smooth = gaussian_filter1d(counts, sigma=2.0)
+                    else:
+                        w = 5
+                        smooth = np.convolve(counts, np.ones(w) / w, mode='same')
+
+                    min_peak_h = 0.05 * smooth.max()
+                    peaks = [i for i in range(1, len(smooth) - 1)
+                             if smooth[i] > smooth[i - 1] and smooth[i] > smooth[i + 1]
+                             and smooth[i] > min_peak_h]
+
+                    cut_idx = 0
+                    if len(peaks) >= 2:
+                        main_peak = peaks[-1]
+                        for p in reversed(peaks[:-1]):
+                            valley_region = smooth[p:main_peak]
+                            vi = p + int(np.argmin(valley_region))
+                            if smooth[vi] / smooth[main_peak] < 0.1:
+                                cut_idx = vi
+                                break
+
+                    zero_cut_idx = nbins
+                    if peaks:
+                        for i in range(peaks[-1] + 1, nbins):
+                            if counts[i] == 0:
+                                zero_cut_idx = i
+                                break
+
+                    sel_counts = counts[cut_idx:zero_cut_idx]
+                    sel_centers = centers[cut_idx:zero_cut_idx]
+                    w_sum = sel_counts.sum()
+                    if w_sum <= 0:
+                        return None, 0
+
+                    mean = float(np.dot(sel_counts, sel_centers) / w_sum)
+                    return mean, int(w_sum)
+                except Exception:
                     return None, 0
 
-                bin_width = (xmax - xmin) / nbins
-                farray = prim.get('fArray', [])
-                # fArray[0] = underflow, [1..nbins] = bins, [nbins+1] = overflow
-                counts = np.array(farray[1:nbins + 1], dtype=float)
-                centers = np.array([xmin + (i + 0.5) * bin_width for i in range(nbins)])
-
-                if counts.sum() <= 0:
-                    return None, 0
-
-                # Valley cut on histogram bins (mirrors smart_valley_cut logic)
-                if SCIPY_AVAILABLE:
-                    smooth = gaussian_filter1d(counts, sigma=2.0)
-                else:
-                    w = 5
-                    smooth = np.convolve(counts, np.ones(w) / w, mode='same')
-
-                min_peak_h = 0.05 * smooth.max()
-                peaks = [i for i in range(1, len(smooth) - 1)
-                         if smooth[i] > smooth[i - 1] and smooth[i] > smooth[i + 1]
-                         and smooth[i] > min_peak_h]
-
-                cut_idx = 0
-                if len(peaks) >= 2:
-                    main_peak = peaks[-1]
-                    for p in reversed(peaks[:-1]):
-                        valley_region = smooth[p:main_peak]
-                        vi = p + int(np.argmin(valley_region))
-                        if smooth[vi] / smooth[main_peak] < 0.1:
-                            cut_idx = vi
-                            break
-
-                zero_cut_idx = nbins
-                if peaks:
-                    for i in range(peaks[-1] + 1, nbins):
-                        if counts[i] == 0:
-                            zero_cut_idx = i
-                            break
-
-                sel_counts = counts[cut_idx:zero_cut_idx]
-                sel_centers = centers[cut_idx:zero_cut_idx]
-                w_sum = sel_counts.sum()
-                if w_sum <= 0:
-                    return None, 0
-
-                mean = float(np.dot(sel_counts, sel_centers) / w_sum)
-                return mean, int(w_sum)
-
-        return None, 0
-    except Exception:
-        return None, 0
+    return None, 0
 
 
 def calculate_valley_cut_average(run_num: int, cs_type: str, center: Optional[str] = None) -> Tuple[Optional[float], int]:
@@ -350,6 +355,11 @@ def calculate_valley_cut_average(run_num: int, cs_type: str, center: Optional[st
     """
     if center is None:
         return None, 0
+
+    # 타워 이름 정규화: HV/position scan은 무대시(M5T1)로 넘기지만, DQM 히스토·mapping은
+    # 항상 대시(M5-T1) 포맷을 쓴다. 조회 경계에서 M{m}T{t} → M{m}-T{t}로 변환한다.
+    # (KEK 9타워 "T1"·이미 대시인 "M5-T1"은 패턴 불일치라 그대로 유지 → 멱등.)
+    center = re.sub(r'^M(\d+)T(\d+)$', r'M\1-T\2', center)
 
     # Primary: DQM JSON (monit과 동일한 데이터)
     mean, count = _read_peakADC_from_dqm_json(run_num, center, cs_type)
@@ -522,7 +532,7 @@ class ExponentialHVPredictor:
             required_hv = self.predict_hv_for_target(channel, target_adc)
             if required_hv is not None:
                 hv_change = int(round(required_hv - current_hv))
-                hv_change = max(-200, min(200, hv_change))  # 안전 제한
+                hv_change = max(-500, min(500, hv_change))  # 안전 제한
 
                 return {
                     "hv_change": hv_change,
@@ -591,7 +601,7 @@ Target 유지: C={target_c} ADC, S={target_s} ADC
 hv_equalization_suggest로 HV 조정 제안 받으세요."""
     
     def start_session(self, session_id: str, target_c: float, target_s: float,
-                     tower: str = "T5") -> str:
+                     tower: str = "M5T3") -> str:
         """새로운 HV equalization 세션 시작"""
 
         # 항상 리셋: 중단된 테스트의 잔류 데이터가 다음 세션에 영향을 주는 것을 방지
@@ -620,7 +630,7 @@ hv_equalization_suggest로 HV 조정 제안 받으세요."""
         Returns:
             {
                 "status": "success",
-                "tower": "T5",
+                "tower": "M5T3",
                 "run": 12345,
                 "current": {"C": {"hv": 800, "adc": 1200}, "S": {"hv": 800, "adc": 1100}},
                 "target": {"C": 1500, "S": 1500},
@@ -722,7 +732,7 @@ hv_equalization_suggest로 HV 조정 제안 받으세요."""
             }
 
         # HV Control Tool 파라미터 생성 — 채널명은 현재 타워 기준 ({tower}C/{tower}S)
-        tower = session.get("current_tower", "T5")
+        tower = session.get("current_tower", "M5T3")
         ch_c = f"{tower}C"
         ch_s = f"{tower}S"
         hv_control_params = None
@@ -945,7 +955,7 @@ def generate_fitting_summary(session_id: str = "default", tower: str = "T?",
 # ======================= LangChain Tools =======================
 
 @tool
-def hv_equalization_start(target_c: float, target_s: float, tower: str = "T5") -> str:
+def hv_equalization_start(target_c: float, target_s: float, tower: str = "M5T3") -> str:
     """
     HV Equalization 세션을 시작합니다.
     
@@ -975,7 +985,7 @@ def hv_equalization_suggest(run_number: Optional[int] = None, hv_c: Optional[flo
         run_number: 분석할 run 번호 (None이면 runnum.txt에서 자동 읽기)
         hv_c: 현재 C 채널 HV 값 (None이면 세션에서 가져옴)
         hv_s: 현재 S 채널 HV 값 (None이면 세션에서 가져옴)
-        tower: 타워 위치 (예: "T5", None이면 세션에서 가져옴)
+        tower: 타워 위치 (예: "M5T3", None이면 세션에서 가져옴)
     
     Returns:
         HV 조정 제안 (JSON 형태, HV Control Tool로 넘길 수 있는 형식)
@@ -996,7 +1006,7 @@ def hv_equalization_suggest(run_number: Optional[int] = None, hv_c: Optional[flo
         
         # Tower 결정
         if tower is None:
-            tower = session.get("current_tower", "T5")
+            tower = session.get("current_tower", "M5T3")
         
         # HV 값 결정
         if hv_c is None:

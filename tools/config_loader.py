@@ -75,6 +75,16 @@ def get_mapping_csv_path() -> str:
     return str(mapping_csv_path)
 
 
+def get_dqm_mapping_csv_path() -> str:
+    """C++ DQM(monit/TBplotengine)이 읽는 '_DQM.csv' 매핑 파일 경로 반환.
+    (name isCeren row col) 포맷 — Mapping(.root)과 같은 디렉토리에 같은 stem +
+    '_DQM.csv'로 존재한다 (예: mapping_TB2026_v1.root → mapping_TB2026_v1_DQM.csv).
+    TBplotengine::init_Generic()의 fCanvas_Tower{N} 순번을 Python에서 재현할 때 사용."""
+    root_path = get_mapping_root_path()
+    mapping_path = Path(root_path)
+    return str(mapping_path.parent / (mapping_path.stem + "_DQM.csv"))
+
+
 
 def get_path_config(key: str) -> str:
     """설정 파일의 Paths 섹션에서 경로를 가져옴"""

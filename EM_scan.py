@@ -25,7 +25,6 @@ def main():
 
     agent = EnergyScanAgent(
         energy_config=energy_config,
-        tower="T5",
         use_base_model=False,
     )
 

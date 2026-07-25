@@ -44,6 +44,11 @@ def run_agent_thread(
             _em_kwargs = {}
             if params.get("tower"):
                 _em_kwargs["tower"] = params["tower"]
+            # dqm_dashboards.yml의 EM_scan cells가 ${current_tower}를 쓰므로
+            # (fCanvas_Tower5 하드코딩 제거) DQM live가 올바른 타워를 그리려면
+            # calib_scan/hv_equalization과 동일하게 shared_state를 채워야 한다.
+            # EnergyScanAgent의 기본 tower("M5T3")와 동일한 fallback을 사용.
+            update_shared_state({"current_tower": params.get("tower") or "M5T3"})
             agent = EnergyScanSimAgent(
                 energy_config={},
                 use_base_model=params.get("use_base_model", False),

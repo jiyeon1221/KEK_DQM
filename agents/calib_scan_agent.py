@@ -367,6 +367,13 @@ When ALL towers are completed, the SYSTEM sends the completion message and ends 
         return None
 
     def _guard_ai_message(self, message: str) -> Optional[str]:
+        # DAQ 직후엔 plot 확인 메시지만 유효하다. base 모델이 가끔 한 단계 되돌아가
+        # (예: 이미 확인된 위치로) 위치 이동 메시지를 다시 내보내는 걸 여기서 막지 않으면
+        # "가끔 이상한 메시지가 뜬다"는 증상으로 그대로 사용자에게 노출된다.
+        if self.state.get("needs_plot_confirm") and message != MSG_PLOT_CONFIRM:
+            return (f"needs_plot_confirm=True — the ONLY valid message now is the plot "
+                    f'confirmation: {{"message": "{MSG_PLOT_CONFIRM}"}}. Do not send any other '
+                    f"message (e.g. a position move message). {self._get_step_hint()}")
         if MSG_PLOT_CONFIRM in message and not self.state.get("needs_plot_confirm"):
             return f"needs_plot_confirm=False — DO NOT send plot confirmation. {self._get_step_hint()}"
         # 위치 확인이 끝났고 아직 DAQ 전이면 유일한 유효 동작은 daq_run_tool 호출이다.

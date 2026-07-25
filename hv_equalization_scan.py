@@ -9,6 +9,7 @@ from pathlib import Path
 
 from tools.hv_equalization_tool import hv_equalization_start
 from agents.hv_equalization_agent import HVEqualizationAgent
+from agents.agent_runner import TOWER_ORDER
 
 FIXED_HV_PATH = Path(__file__).parent / "fixed_hv.txt"
 
@@ -30,7 +31,13 @@ def _write_fixed_hv():
                 continue
             name_to_vset[name.upper()] = str(row.get("V0Set", "")).strip()
 
-        drc_channels = [f"T{i}{s}" for i in range(1, 10) for s in ("S", "C")]
+        # 9타워(T1..T9) 스킴 잔재 — 실제 HV 채널명은 "M{1-9}T{1-4}{C,S}"(36타워×2)이다.
+        # 옛 이름으로 조회하면 name_to_vset에 전혀 매치되지 않아 fixed_hv.txt가
+        # 사실상 빈 파일로 저장된다 (tools/hv_control_tool.py의 "M5" 모듈 shorthand가
+        # 동일한 "M{m}T{t}{s}" 포맷으로 name_map을 조회해 정상 동작하는 것과 동일 근거).
+        drc_channels = [
+            f"M{m}T{t}{s}" for m in range(1, 10) for t in range(1, 5) for s in ("S", "C")
+        ]
         lines = ["# Fixed HV reference — DO NOT MODIFY (edit manually with chmod 644 first)"]
         for ch in drc_channels:
             val = name_to_vset.get(ch, "")
@@ -54,9 +61,6 @@ def _write_fixed_hv():
                 hv.ssh_client.close()
         except Exception:
             pass
-
-TOWER_ORDER = ["T1", "T2", "T3", "T6", "T5", "T4", "T7", "T8", "T9"]
-
 
 def main():
     print("\n" + "=" * 60)

@@ -80,6 +80,7 @@ class HVEqualizationSimAgent(SimExecMixin, _ADCSimAgent):
                 self.state["last_hv_s"] = self.state["last_suggested_hv_s"]
             self.state["last_suggested_hv_c"] = None
             self.state["last_suggested_hv_s"] = None
+            self.state["approval_confirmed"] = False  # 다음 승인 라운드용 리셋 (부모와 동일)
 
             self.io.send_tool_output(f"🔍 [SIM] HV 적용 확인 중 ({self.tower})...")
             verify = self._sim.hv_status([f"{self.tower}C", f"{self.tower}S"])
@@ -89,6 +90,11 @@ class HVEqualizationSimAgent(SimExecMixin, _ADCSimAgent):
                 self.state["last_hv_c"] = v_c
                 self.state["last_hv_s"] = v_s
                 self.log(f"[SIM] HV Verified: C={v_c}V, S={v_s}V")
+            # 전압 적용 직후엔 반드시 1g(MSG_HV_CONFIRM) 메시지를 사용자에게 보여준
+            # 다음에야 다음 DAQ로 넘어가게 강제한다 (부모 _guard_tool/_guard_ai_message가
+            # 상속된 채로 이 플래그를 검사하므로, 이 override에서도 반드시 설정해야 한다 —
+            # 이걸 빠뜨린 게 웹 UI(run_web_sim.py)에서 확인 메시지가 안 뜨던 실제 원인이었다).
+            self.state["needs_hv_confirm"] = True
             return result
 
         if cmd == "status":

@@ -27,6 +27,60 @@ M5T3가 기준점(dx=0, dy=0)이며, 수식으로 오프셋 계산됨.
 VALID_TOWERS = [f"M{m}T{t}" for m in range(1, 10) for t in range(1, 5)]
 
 
+# ======================= DQM Canvas Numbering =======================
+# DQM(monit/TBplotengine::init_Generic, DQM/src/TBplotengine.cc)은 타워별 캔버스를
+# "fCanvas_Tower{N}"으로 저장하는데, N은 타워명에서 바로 계산되는 게 아니라 매핑 CSV에서
+# row>0·col>0·이름이 "-C"로 끝나고 isCeren==1인 이름들을 뽑아 사전식(lexicographic)
+# 정렬한 뒤 매긴 1-based 순번이다 (예: "M5-T1" → 17). 하드코딩 공식((module-1)*4+sub)
+# 대신 실제 매핑 파일을 그대로 읽어 C++ 알고리즘을 재현한다 — 모듈/타워 구성이 바뀌어도
+# TBplotengine과 항상 일치하게 하기 위함.
+_dqm_tower_rank_cache: Optional[Dict[str, int]] = None
+
+
+def _load_dqm_tower_ranks() -> Dict[str, int]:
+    global _dqm_tower_rank_cache
+    if _dqm_tower_rank_cache is not None:
+        return _dqm_tower_rank_cache
+
+    from .config_loader import get_dqm_mapping_csv_path
+
+    ranks: Dict[str, int] = {}
+    try:
+        names = []
+        with open(get_dqm_mapping_csv_path()) as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) < 4:
+                    continue
+                name = parts[0]
+                try:
+                    is_ceren, row, col = int(parts[1]), int(parts[2]), int(parts[3])
+                except ValueError:
+                    continue
+                if row <= 0 or col <= 0:
+                    continue
+                if is_ceren == 1 and name.endswith("-C"):
+                    names.append(name)
+        for i, name in enumerate(sorted(names), start=1):
+            root = name[:-2].replace("-", "")  # "M5-T1-C" -> "M5T1"
+            ranks[root] = i
+    except Exception:
+        ranks = {}
+
+    _dqm_tower_rank_cache = ranks
+    return ranks
+
+
+def tower_to_dqm_canvas_number(tower: Any) -> str:
+    """타워 이름("M5T1")을 DQM 라이브 캔버스 순번 문자열("17")로 변환.
+    매핑에서 순번을 못 찾으면(파일 없음/이름 불일치 등) 입력을 그대로 반환한다 —
+    기존에 값을 그대로 셀 이름에 꽂던 폴백 동작을 보존."""
+    if not isinstance(tower, str):
+        return str(tower)
+    rank = _load_dqm_tower_ranks().get(tower.strip().upper())
+    return str(rank) if rank is not None else tower
+
+
 # ======================= Position Calculator =======================
 
 class PositionCalculator_Sym:

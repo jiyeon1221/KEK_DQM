@@ -48,7 +48,7 @@ class EnergyScanAgent(BaseAgent):
         self.daq_tool = DAQRunTool()
         
         from tools.position_calculator_tool import get_calculator
-        t5_pos = get_calculator().calculate_tower_position("M5T3", rotation=1.5, tilting=1.0)
+        t5_pos = get_calculator().calculate_tower_position("M5T3", rotation=1.5, tilting=0.0)
         self.t5_x = t5_pos['x']
         self.t5_y = t5_pos['y']
         
@@ -133,7 +133,7 @@ Params: {
     "pos_h": <x_from_state>,
     "pos_v": <y_from_state>,
     "pos_rot": 1.5,
-    "pos_tilt": 1.0,
+    "pos_tilt": 0.0,
     "beam_energy": <energy>
 }
 (If energy_config[energy] has "config", also include "config": <that name> in Params. Omit otherwise.)
@@ -176,7 +176,7 @@ When ALL energies are completed, the SYSTEM sends the completion message and end
         lines = []
         lines.append(f"Phase: {self.state['phase']}")
         lines.append(f"Tower: {self.state['tower']}")
-        lines.append(f"M5T3 Position: x={self.t5_x:.3f}, y={self.t5_y:.3f}, rot=1.5, tilt=1.0")
+        lines.append(f"M5T3 Position: x={self.t5_x:.3f}, y={self.t5_y:.3f}, rot=1.5, tilt=0.0")
         lines.append(f"Position confirmed: {self.state.get('y_confirmed', False)}")
         lines.append(f"needs_plot_confirm: {self.state.get('needs_plot_confirm', False)}")
         if self.state['position']:
@@ -386,7 +386,7 @@ When ALL energies are completed, the SYSTEM sends the completion message and end
                 program="EM Scan",
                 pos=self._position_for_current_step(),
                 pos_rot=1.5,
-                pos_tilt=1.0,
+                pos_tilt=0.0,
                 config=self._daq_config_for(energy_key),
             )
 
@@ -426,6 +426,13 @@ When ALL energies are completed, the SYSTEM sends the completion message and end
         return None
 
     def _guard_ai_message(self, message: str) -> Optional[str]:
+        # DAQ 직후엔 plot 확인 메시지만 유효하다. 모델이 가끔 한 단계 되돌아가 다른
+        # 메시지(예: 위치 이동)를 다시 내보내는 걸 막지 않으면 "가끔 이상한 메시지가
+        # 뜬다"는 증상으로 그대로 사용자에게 노출된다.
+        if self.state.get("needs_plot_confirm") and message != MSG_PLOT_CONFIRM:
+            return (f"needs_plot_confirm=True — the ONLY valid message now is the plot "
+                    f'confirmation: {{"message": "{MSG_PLOT_CONFIRM}"}}. Do not send any other '
+                    f"message (e.g. a position move message). {self._get_step_hint()}")
         if MSG_PLOT_CONFIRM in message and not self.state.get("needs_plot_confirm"):
             return f"needs_plot_confirm=False — DO NOT send plot confirmation. {self._get_step_hint()}"
         return None

@@ -102,12 +102,28 @@ async def api_hv_status_all(expert: bool = False):
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
 
+@app.get("/api/hv/hodoscope")
+async def api_hv_hodoscope():
+    """Return current hodoscope HV setting read from the DAQ set file."""
+    try:
+        from tools.hodoscope_hv_tool import read_hv_from_setfile
+        hv = read_hv_from_setfile()
+        if hv is None:
+            return JSONResponse({"ok": False, "error": "Set file을 읽을 수 없습니다."}, status_code=500)
+        return {"ok": True, "hv": hv}
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+
 class HvSetRequest(BaseModel):
-    command: str
-    channels: object
+    command: str           # "voltage" | "on" | "off" | "i0set" | "svmax" | "rup" | "rdown" | "name"
+    channels: object       # str | list
     voltage: float = None
     current: float = None
     svmax: float = None
+    rup: float = None
+    rdown: float = None
+    name: str = None
 
 
 _hv_cmd_lock = asyncio.Lock()
@@ -126,11 +142,24 @@ async def api_hv_set(req: HvSetRequest):
             if req.command == "i0set":
                 if req.current is None:
                     return JSONResponse({"ok": False, "error": "current 값이 필요합니다"}, status_code=400)
+                params["command"] = "current"
                 params["current"] = req.current
             if req.command == "svmax":
                 if req.svmax is None:
                     return JSONResponse({"ok": False, "error": "svmax 값이 필요합니다"}, status_code=400)
                 params["svmax"] = req.svmax
+            if req.command == "rup":
+                if req.rup is None:
+                    return JSONResponse({"ok": False, "error": "rup 값이 필요합니다"}, status_code=400)
+                params["rup"] = req.rup
+            if req.command == "rdown":
+                if req.rdown is None:
+                    return JSONResponse({"ok": False, "error": "rdown 값이 필요합니다"}, status_code=400)
+                params["rdown"] = req.rdown
+            if req.command == "name":
+                if not req.name:
+                    return JSONResponse({"ok": False, "error": "name 값이 필요합니다"}, status_code=400)
+                params["name"] = req.name
             loop = asyncio.get_event_loop()
             result = await loop.run_in_executor(None, tool.execute, params)
             return {"ok": True, "output": result}
@@ -332,7 +361,9 @@ async def api_run_monit(req: MonitRequest):
     if req.skip_event is not None and req.skip_event > 0:
         cmd.extend(["--SkipEvent", str(req.skip_event)])
     for flag in req.flags:
-        if flag in ("LIVE", "AUXcut", "AUX"):
+        # "Astro" is currently dormant (deactivated in the freeform UI) but is
+        # forwarded anyway to stay identical to web/server.py if it comes back.
+        if flag in ("LIVE", "AUXcut", "AUX", "Astro"):
             cmd.append(f"--{flag}")
     if req.aux_cut_mode and req.aux_cut_mode != "none":
         cmd.extend(["--AUXCutMode", req.aux_cut_mode])

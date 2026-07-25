@@ -18,9 +18,10 @@
     <button class="agent-btn" id="btn-em"    onclick="startAgent('em_scan')">EM Scan</button>
     <button class="agent-btn" id="btn-calib" onclick="startAgent('calib_scan')">Calibration</button>
     <button class="agent-btn" id="btn-hv"    onclick="startAgent('hv_equalization')">HV Equalization</button>
-    <button class="agent-btn" id="btn-hv-sim" onclick="startAgent('hv_equalization_sim')">HV Sim</button>
+    <!-- 실전에서는 사용하지 않아 화면에서만 숨김. 주석 해제하면 다시 활성화됨. -->
+    <!-- <button class="agent-btn" id="btn-hv-sim" onclick="startAgent('hv_equalization_sim')">HV Sim</button> -->
     <button class="agent-btn" id="btn-pos"   onclick="startAgent('position_scan')">Position Scan</button>
-    <button class="agent-btn" id="btn-pos-sim" onclick="startAgent('position_scan_sim')">Position Sim</button>
+    <!-- <button class="agent-btn" id="btn-pos-sim" onclick="startAgent('position_scan_sim')">Position Sim</button> -->
     <button class="agent-btn" id="stop-btn"  onclick="stopAgent()" style="display:none">Stop Agent</button>
     <button class="agent-btn" id="kill-btn"  onclick="killRun()">KILL RUN</button>
     <button class="agent-btn" id="hv-check-btn" title="전체 채널 HV 상태 확인">HV Check</button>

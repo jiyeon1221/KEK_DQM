@@ -1,0 +1,4 @@
+[submodule "DQM"]
+	path = DQM
+	url = https://github.com/kyHwangs/DRC_TestBeam_DQM.git
+	branch = DQMonly_2026

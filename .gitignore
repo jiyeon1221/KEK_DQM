@@ -27,6 +27,9 @@ logging/*.json
 # DAQ 전체 제외
 DAQ/
 
+# DAQ_JBNU 전체 제외 (임베디드 git 저장소)
+DAQ_JBNU/
+
 # DQM 빌드 / 컴파일 아티팩트
 DQM/output/
 DQM/build/

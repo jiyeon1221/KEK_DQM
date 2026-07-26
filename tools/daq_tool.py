@@ -72,7 +72,7 @@ class DAQRunTool(BaseTool):
             raise RuntimeError(f"파라미터 오류: {error}")
 
         events = params["events"]
-        config = params.get("config", "setup")
+        config = params.get("config", "pre1")
 
         try:
             events = int(events)

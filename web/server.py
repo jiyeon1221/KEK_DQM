@@ -1144,11 +1144,17 @@ async def websocket_endpoint(ws: WebSocket):
         from starlette.websockets import WebSocketState
 
         tool_buf = []
+        tool_flush_interval = 0.5
+        last_tool_flush = asyncio.get_running_loop().time()
 
-        async def flush_tool():
-            nonlocal tool_buf
+        async def flush_tool(force: bool = False):
+            nonlocal tool_buf, last_tool_flush
             if tool_buf:
                 combined = "\n".join(tool_buf)
+                now = asyncio.get_running_loop().time()
+                is_termination = "received termination" in combined.lower()
+                if not force and not is_termination and now - last_tool_flush < tool_flush_interval:
+                    return
                 try:
                     await ws.send_json({"type": "tool_output", "content": combined})
                 except Exception:
@@ -1156,12 +1162,13 @@ async def websocket_endpoint(ws: WebSocket):
                 # "Received termination" is printed by the DAQ executable when
                 # a run finishes successfully.  Emit daq_complete so the browser
                 # can play a notification sound for the remote operator.
-                if "received termination" in combined.lower():
+                if is_termination:
                     try:
                         await ws.send_json({"type": "daq_complete"})
                     except Exception:
                         pass
                 tool_buf = []
+                last_tool_flush = now
 
         while True:
             if ws.client_state != WebSocketState.CONNECTED:
@@ -1188,10 +1195,11 @@ async def websocket_endpoint(ws: WebSocket):
                     if msg.get("type") == "tool_output" and not is_brain:
                         # Batch scenario tool_output (DAQ stdout etc.)
                         tool_buf.append(msg["content"])
+                        await flush_tool()
                     elif is_brain:
                         # Brain messages: flush scenario buffer first,
                         # then send immediately WITH source tag preserved
-                        await flush_tool()
+                        await flush_tool(force=True)
 
                         out_msg = msg
                         mtype = msg.get("type")
@@ -1225,7 +1233,7 @@ async def websocket_endpoint(ws: WebSocket):
                                 pass
                     else:
                         # Non-tool messages: flush buffer first, then send immediately
-                        await flush_tool()
+                        await flush_tool(force=True)
                         try:
                             await ws.send_json(msg)
                         except Exception:

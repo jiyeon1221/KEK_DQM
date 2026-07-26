@@ -20,7 +20,7 @@ class CalibScanAgent(BaseAgent):
         tower_order: Optional[list] = None,
         beam_energy: Optional[float] = None,
         target_events: Optional[int] = None,
-        daq_config: str = "setup",
+        daq_config: str = "pre1",
         use_base_model: bool = True,
         io_handler=None,
     ):

@@ -21,7 +21,7 @@ class EnergyScanAgent(BaseAgent):
         energy_config: Dict[float, int],
         tower: str = "M5T3",
         position: Optional[Dict[str, float]] = None,
-        daq_config: str = "setup",
+        daq_config: str = "pre1",
         use_base_model: bool = True,  # Fine-tuning 전에는 base model 사용
         io_handler=None,
     ):
@@ -97,9 +97,13 @@ Follow these steps EXACTLY:
   {"message": "에너지 설정을 입력해주세요.\n예) 10GeV 100000개 20GeV 200000개 50GeV 300000개  또는  10GeV 80000 30GeV 500000 120GeV 300000"}
 
 After user responds, parse their input:
-0b. Update state with parsed config:
-  {"tool": "none", "update_state": {"energy_config": {<energy_int>: {"target_events": <n>, "collected_events": 0, "runs": [], "completed": false, "completed_at": null}, ...}, "scan_order": [<sorted ints>], "phase": "idle"}}
-  CRITICAL: energy keys must be INTEGERS (e.g., 1, 2, 3). scan_order must be sorted ascending.
+0b. Update state with parsed config. Emit ONLY target_events per energy — the SYSTEM
+  fills in collected_events/runs/completed/scan_order. Keep the JSON as SHORT as possible:
+  {"tool": "none", "update_state": {"energy_config": {"<energy_int>": {"target_events": <n>}, ...}, "phase": "idle"}}
+  Example: {"tool": "none", "update_state": {"energy_config": {"10": {"target_events": 100000}, "50": {"target_events": 300000}}, "phase": "idle"}}
+  CRITICAL: energy keys must be INTEGERS (e.g., 1, 2, 3).
+  CRITICAL: Emit ONLY "target_events" (and "config" if named) per energy. Do NOT emit
+  collected_events, runs, completed, completed_at, or scan_order — the SYSTEM owns those.
   CRITICAL: beam_energy in GeV → store as number (integer if whole: "2GeV" → 2; float if decimal: "2.5GeV" → 2.5). NEVER convert to MeV.
   CRITICAL: If user says "모두", "각각", or "씩" with one number (e.g., "모두 500개"), apply that number to ALL energies.
   CRITICAL: If the user names a DAQ config for an energy (e.g. "3GeV setup1로 200000"),
@@ -156,7 +160,7 @@ When ALL energies are completed, the SYSTEM sends the completion message and end
 4. Output JSON format (CHOOSE ONE, NEVER BOTH):
    - {"tool": "...", "params": {...}}  (for tool execution)
    - {"message": "..."}  (for user message)
-   - {"tool": "none", "update_state": {...}}  (ONLY for STEP 0b config parsing)
+   - {"tool": "none", "update_state": {...}}  (ONLY for STEP 0b config parsing; target_events only)
    CRITICAL: NEVER output both "tool" and "message" in the same JSON. NEVER put "message" inside "update_state".
 5. Use energy_config[energy].target_events for DAQ events
 6. STEP TRANSITION RULES:
@@ -346,9 +350,9 @@ When ALL energies are completed, the SYSTEM sends the completion message and end
         return {"x": self.t5_x, "y": self.t5_y}
 
     def _daq_config_for(self, energy_key) -> str:
-        """해당 에너지의 DAQ config 이름 — 에너지별 지정이 없으면 기본 daq_config("setup")."""
+        """해당 에너지의 DAQ config 이름 — 에너지별 지정이 없으면 기본 daq_config("pre1")."""
         cfg = self.state.get("energy_config", {}).get(energy_key, {}) if energy_key is not None else {}
-        return cfg.get("config") or self.state.get("daq_config", "setup")
+        return cfg.get("config") or self.state.get("daq_config", "pre1")
 
     def _resolve_daq_energy_key(self):
         """DAQ용 에너지 — state/scan_order 기준 (LLM params 무시)."""
@@ -417,11 +421,22 @@ When ALL energies are completed, the SYSTEM sends the completion message and end
     
     # ===== Helper 함수 =====
     
-    def _guard_tool(self, tool_name: str, params) -> Optional[str]:
-        if tool_name == "daq_run_tool" and self.state.get("needs_plot_confirm"):
+    def _guard_tool(self, tool_name: str, decision) -> Optional[str]:
+        if tool_name != "daq_run_tool":
+            return None
+        # 1) DAQ 직후엔 plot 확인이 먼저 — 재실행 차단
+        if self.state.get("needs_plot_confirm"):
             return (
                 f'needs_plot_confirm=True — DAQ already ran. '
                 f'Send: {{"message": "{MSG_PLOT_CONFIRM}"}}'
+            )
+        # 2) 위치 이동 확인(→scanning) 전에는 DAQ 금지. config/idle에서 모델이 곧장
+        #    daq_run_tool을 내 "혼자 돌려버리는" 것을 막는다(calib과 동일한 위치 가드).
+        if self.state.get("phase") != "scanning" or not self.state.get("y_confirmed"):
+            return (
+                f"아직 DAQ를 실행할 수 없습니다 (phase={self.state.get('phase')}, "
+                f"위치확인={self.state.get('y_confirmed')}). 위치 이동 메시지와 빔 에너지 "
+                f"설정 메시지를 순서대로 먼저 보내야 합니다. {self._get_step_hint()}"
             )
         return None
 
@@ -560,6 +575,34 @@ When ALL energies are completed, the SYSTEM sends the completion message and end
                 pairs[ev] = (events_map[ev], cfg_name)
         return pairs
 
+    def _config_from_pairs(self, pairs: Dict[float, tuple]) -> Dict[Any, Dict]:
+        """_parse_config_pairs 결과 → energy_config(코드 소유 필드 포함) 딕셔너리."""
+        corrected: Dict[Any, Dict] = {}
+        for e, (n, cfg_name) in pairs.items():
+            key = int(e) if e == int(e) else e
+            corrected[key] = {
+                "target_events": n, "collected_events": 0,
+                "runs": [], "completed": False, "completed_at": None,
+            }
+            if cfg_name:
+                corrected[key]["config"] = cfg_name
+        return corrected
+
+    def _recover_decision(self, failed_decision: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """config 단계에서 모델 JSON이 토큰 한도로 잘려 파싱 실패했을 때,
+        사용자 입력 짝으로 energy_config를 결정론적으로 합성해 복구.
+        (config 파싱은 코드가 진짓값을 소유하므로 모델의 긴 JSON에 의존할 필요 없음.)"""
+        if self.state.get("phase") != "config":
+            return None
+        pairs = self._parse_config_pairs(self._last_user_input)
+        if not pairs:
+            return None
+        self.log("config JSON 생성 실패 → 입력 짝 기준으로 energy_config 복구")
+        return {"tool": "none", "update_state": {
+            "energy_config": self._config_from_pairs(pairs),
+            "phase": "idle",
+        }}
+
     def _guard_update_state(self, updates: Dict[str, Any]) -> Optional[str]:
         """STEP 0b config 파싱 방어 (2단계):
         1) 코드가 GeV 앵커로 짝을 확정할 수 있으면 → LLM 파싱을 코드 값으로 자동 교정
@@ -574,15 +617,7 @@ When ALL energies are completed, the SYSTEM sends the completion message and end
         # ── 1) 자동 교정: 코드가 짝을 확정할 수 있는 경우 ──
         pairs = self._parse_config_pairs(self._last_user_input)
         if pairs:
-            corrected = {}
-            for e, (n, cfg_name) in pairs.items():
-                key = int(e) if e == int(e) else e
-                corrected[key] = {
-                    "target_events": n, "collected_events": 0,
-                    "runs": [], "completed": False, "completed_at": None,
-                }
-                if cfg_name:
-                    corrected[key]["config"] = cfg_name
+            corrected = self._config_from_pairs(pairs)
             llm_pairs = {}
             for k, v in ec.items():
                 try:
@@ -674,9 +709,15 @@ When ALL energies are completed, the SYSTEM sends the completion message and end
                 self.state[key] = value
                 self.log(f"State updated: {key} = {value}")
 
-        # config → idle 전환(STEP 0b 완료) 시 파싱 결과를 코드가 echo
-        if _was_config and self.state.get("phase") == "idle" and self.state.get("energy_config"):
-            self._echo_parsed_config()
+        # config 단계에서 energy_config가 채워지면 파싱 완료 → 코드가 phase=idle로 확정한다.
+        # (모델이 update_state에 "phase":"idle"을 빠뜨려도 STEP 1로 진행하도록. 이게 없으면
+        #  phase가 config에 남아 모델이 곧장 daq_run_tool을 내는 "혼자 돌림"으로 이어진다.)
+        if _was_config and self.state.get("energy_config"):
+            if self.state.get("phase") == "config":
+                self.state["phase"] = "idle"
+                self.log("State updated: phase = idle (config 파싱 완료 — 코드가 확정)")
+            if self.state.get("phase") == "idle":
+                self._echo_parsed_config()
 
     def _extract_run_number(self, daq_output: str = None) -> Optional[int]:
         """Run number 추출 (runnum.txt → fallback: DAQ output 파싱)"""

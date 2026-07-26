@@ -491,7 +491,7 @@ class BrainAgent(BaseAgent):
     def _format_confirm_preview(tool_name: str, params: dict) -> str:
         if tool_name == "daq_run":
             events = params.get("events", "?")
-            config = params.get("config", "setup")
+            config = params.get("config", "pre1")
             events_str = f"{events:,}" if isinstance(events, int) else f"{events}"
             return f"DAQ 실행\n  Config: {config}\n  이벤트 수: {events_str}"
         if tool_name == "hv_write":

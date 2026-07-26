@@ -517,6 +517,7 @@ function setStatus(text, cls) {
 function setAgentButtons(running) {
   ['btn-em', 'btn-calib', 'btn-hv', 'btn-hv-sim', 'btn-pos', 'btn-pos-sim'].forEach(id => {
     const btn = document.getElementById(id);
+    if (!btn) return;  // sim 버튼 숨김 시 null-safe
     btn.disabled = running;
     btn.classList.toggle('active', running && id === 'btn-' + agentIdOf(activeAgent));
   });

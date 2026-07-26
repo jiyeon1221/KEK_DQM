@@ -67,7 +67,7 @@ class ToolSimulator:
     ) -> str:
         run_number = self._next_run_number()
         events = params.get("events", "?")
-        config = params.get("config", "setup")
+        config = params.get("config", "pre1")
         program = params.get("program", "?")
         beam = params.get("beam_energy", "?")
         lines = [

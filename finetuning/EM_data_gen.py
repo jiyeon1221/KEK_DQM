@@ -29,9 +29,13 @@ Follow these steps EXACTLY:
   {"message": "에너지 설정을 입력해주세요.\n예) 10GeV 100000개 20GeV 200000개 50GeV 300000개  또는  10GeV 80000 30GeV 500000 120GeV 300000"}
 
 After user responds, parse their input:
-0b. Update state with parsed config:
-  {"tool": "none", "update_state": {"energy_config": {<energy_int>: {"target_events": <n>, "collected_events": 0, "runs": [], "completed": false, "completed_at": null}, ...}, "scan_order": [<sorted ints>], "phase": "idle"}}
-  CRITICAL: energy keys must be INTEGERS (e.g., 1, 2, 3). scan_order must be sorted ascending.
+0b. Update state with parsed config. Emit ONLY target_events per energy — the SYSTEM
+  fills in collected_events/runs/completed/scan_order. Keep the JSON as SHORT as possible:
+  {"tool": "none", "update_state": {"energy_config": {"<energy_int>": {"target_events": <n>}, ...}, "phase": "idle"}}
+  Example: {"tool": "none", "update_state": {"energy_config": {"10": {"target_events": 100000}, "50": {"target_events": 300000}}, "phase": "idle"}}
+  CRITICAL: energy keys must be INTEGERS (e.g., 1, 2, 3).
+  CRITICAL: Emit ONLY "target_events" (and "config" if named) per energy. Do NOT emit
+  collected_events, runs, completed, completed_at, or scan_order — the SYSTEM owns those.
   CRITICAL: beam_energy in GeV → store as number (integer if whole: "2GeV" → 2; float if decimal: "2.5GeV" → 2.5). NEVER convert to MeV.
   CRITICAL: If user says "모두", "각각", or "씩" with one number (e.g., "모두 500개"), apply that number to ALL energies.
   CRITICAL: If the user names a DAQ config for an energy (e.g. "3GeV setup1로 200000"),
@@ -88,7 +92,7 @@ When ALL energies are completed, the SYSTEM sends the completion message and end
 4. Output JSON format (CHOOSE ONE, NEVER BOTH):
    - {"tool": "...", "params": {...}}  (for tool execution)
    - {"message": "..."}  (for user message)
-   - {"tool": "none", "update_state": {...}}  (ONLY for STEP 0b config parsing)
+   - {"tool": "none", "update_state": {...}}  (ONLY for STEP 0b config parsing; target_events only)
    CRITICAL: NEVER output both "tool" and "message" in the same JSON. NEVER put "message" inside "update_state".
 5. Use energy_config[energy].target_events for DAQ events
 6. STEP TRANSITION RULES:
@@ -270,17 +274,26 @@ def generate_workflow_normal(energy_list, events_list, user_input, config_list=N
     history.append({"role": "assistant", "content": json.dumps(dec, ensure_ascii=False)})
     history.append({"role": "user",      "content": user_input})
 
-    # STEP 0b (config parse — model-owned; state still phase=config at decision time)
-    energy_config_dict = {}
+    # STEP 0b (config parse — model-owned; state still phase=config at decision time).
+    # 학습 타깃은 짧은 형태(target_events만)로 낸다 — MAX_NEW_TOKENS 잘림 방지.
+    # collected_events/runs/completed/scan_order는 SYSTEM(코드)이 채우므로 모델이 뱉지 않는다.
+    target_config = {}
+    for e, ev, cfg in zip(energy_list, events_list, config_list):
+        entry = {"target_events": ev}
+        if cfg:
+            entry["config"] = cfg
+        target_config[e] = entry
+    dec = {"tool": "none", "update_state": {"energy_config": target_config, "phase": "idle"}}
+    examples.append(make_example(state, history, dec))
+    history.append({"role": "assistant", "content": json.dumps(dec, ensure_ascii=False)})
+    # state는 코드가 채우는 전체 필드 + scan_order로 진전(이후 STEP 1+ context 생성에 필요).
+    full_config = {}
     for e, ev, cfg in zip(energy_list, events_list, config_list):
         entry = {"target_events": ev, "collected_events": 0, "runs": [], "completed": False, "completed_at": None}
         if cfg:
             entry["config"] = cfg
-        energy_config_dict[e] = entry
-    dec = {"tool": "none", "update_state": {"energy_config": energy_config_dict, "scan_order": energy_list, "phase": "idle"}}
-    examples.append(make_example(state, history, dec))
-    history.append({"role": "assistant", "content": json.dumps(dec, ensure_ascii=False)})
-    state.update(dec["update_state"])
+        full_config[e] = entry
+    state.update({"energy_config": full_config, "scan_order": energy_list, "phase": "idle"})
 
     # STEP 1a: 위치 이동 메시지
     dec = {"message": MESSAGE_MOVE_POS.format(x=t5_x, y=t5_y)}

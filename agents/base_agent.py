@@ -103,6 +103,30 @@ def correct_event_count_in_text(text: str, n) -> str:
     return text
 
 
+# ── 이동 위치(x/y mm) 표시 교정 ──
+# 모델이 좌표 자릿수(0의 개수)도 자주 틀리므로("1000 → 100"), 이동 메시지의
+# x/y는 코드가 state의 진짓값(_position_for_current_step)으로부터 교정한다.
+# "mm" 단위에 앵커링하여 전압/에너지/ADC 등 다른 숫자는 건드리지 않는다.
+_RE_POS_X = re.compile(r'((?<![A-Za-z])x\s*[=:]\s*)(-?[\d,]+(?:\.\d+)?)(\s*mm)', re.IGNORECASE)
+_RE_POS_Y = re.compile(r'((?<![A-Za-z])y\s*[=:]\s*)(-?[\d,]+(?:\.\d+)?)(\s*mm)', re.IGNORECASE)
+
+
+def correct_position_in_text(text: str, x, y) -> str:
+    """이동 메시지의 x/y 좌표를 state 진짓값(mm, 소수 셋째 자리)으로 교정.
+    "이동" 키워드가 있는 메시지에만 적용해 위치 요약·배너 등 다른 좌표 나열을
+    건드리지 않는다. x/y 각각 float 변환 가능할 때만 해당 축을 교정한다."""
+    if not isinstance(text, str) or not text or '이동' not in text:
+        return text
+    for val, rgx in ((x, _RE_POS_X), (y, _RE_POS_Y)):
+        try:
+            formatted = f"{float(val):.3f}"
+        except (TypeError, ValueError):
+            continue
+        rgx_formatted = formatted  # 클로저 캡처용
+        text = rgx.sub(lambda m: m.group(1) + rgx_formatted + m.group(3), text)
+    return text
+
+
 
 class BaseAgent(ABC):
 
@@ -428,6 +452,10 @@ class BaseAgent(ABC):
         print(f"\n{'='*70}\n⚡ {self.agent_name} Started\n{'='*70}")
 
     def _pre_iteration(self): pass
+    def _recover_decision(self, failed_decision: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """decide()가 파싱 실패로 error를 낸 턴에, state 진짓값으로 결정을 결정론적
+        복구할 수 있으면 대체 decision을 반환. 기본은 복구 안 함(None)."""
+        return None
     def _is_complete(self) -> bool: return bool(self.state.get("done"))
     def _completion_message(self) -> Optional[str]: return None
     def _completed_count(self) -> int: return 0
@@ -457,8 +485,13 @@ class BaseAgent(ABC):
         이벤트 개수의 자릿수를 교정하고 콤마 포맷으로 통일한다.
         서브클래스가 오버라이드할 땐 super()를 호출해 이 교정을 유지할 것."""
         corrected = correct_event_count_in_text(message, self.state.get("target_events"))
+        # 이동 메시지의 x/y 좌표도 현재 스텝 진짓값으로 자릿수 교정.
+        # _position_for_current_step()이 None이면(예: brain, 활성 스텝 없음) no-op.
+        pos = self._position_for_current_step()
+        if pos is not None:
+            corrected = correct_position_in_text(corrected, pos.get("x"), pos.get("y"))
         if corrected != message:
-            self.log(f"이벤트 개수 표시 교정(state 기준): {message!r} → {corrected!r}")
+            self.log(f"메시지 표시 교정(state 기준): {message!r} → {corrected!r}")
         return corrected
 
     def _stop_requested(self) -> bool:
@@ -508,13 +541,17 @@ class BaseAgent(ABC):
                 print(f"\n🔍 Decision: {json.dumps(decision, ensure_ascii=False)}")
 
                 if "error" in decision:
-                    _error_count += 1
-                    self.log(f"Agent error ({_error_count}/{_MAX_ERRORS}): {decision['error']}")
-                    if _error_count >= _MAX_ERRORS:
-                        print(f"\n❌ 연속 오류 {_MAX_ERRORS}회 — 종료합니다.")
-                        break
-                    self.add_to_history("user", "Output valid JSON only. No other text.")
-                    continue
+                    recovered = self._recover_decision(decision)
+                    if recovered is not None:
+                        decision = recovered
+                    else:
+                        _error_count += 1
+                        self.log(f"Agent error ({_error_count}/{_MAX_ERRORS}): {decision['error']}")
+                        if _error_count >= _MAX_ERRORS:
+                            print(f"\n❌ 연속 오류 {_MAX_ERRORS}회 — 종료합니다.")
+                            break
+                        self.add_to_history("user", "Output valid JSON only. No other text.")
+                        continue
 
                 _error_count = 0
 

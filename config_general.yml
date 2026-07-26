@@ -19,7 +19,7 @@ Paths:
   SpreadsheetId: "1ExfjnGbRvupQD0ZbTTl6NOWP7drRhgioPmzxUoFwuA8"
 
   DaqWorkDir: "/Users/yhep/scratch/notice/test/TB_daq"
-  DaqScript: "/Users/yhep/scratch/notice/test/TB_daq/run_all_KEK.sh"
+  DaqScript: "/Users/yhep/scratch/notice/test/TB_daq/run_all.sh"
   NoticeBase: "/Users/yhep/scratch/notice"
   KillMeFile: "/Users/yhep/scratch/notice/test/TB_daq/KILLME"
 
